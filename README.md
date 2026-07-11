@@ -1,17 +1,19 @@
-# 板橋 ダッシュボード（Viewer）
+# 板橋 ダッシュボード
 
-Notionで管理している「板橋 ダッシュボード」の基幹部分（進行中案件・TODO・プロジェクト管理・議事録・ナレッジベース）を、**読み取り専用**の軽量Webビューアとして表示するための静的サイトです。
+Notionで管理している「板橋 ダッシュボード」の基幹部分（進行中案件・TODO・プロジェクト管理・議事録・ナレッジベース）を、**読み取り専用**のダッシュボードとして1ページで俯瞰できる静的サイトです。
 
-- データの実体は **Notionのまま**（このリポジトリではデータを保持しない）
-- GitHub Actionsが3時間ごと（＋手動実行）にNotion APIからデータを取得し、GitHub Pagesへ静的サイトとして配信
+- `index.html` のタブ型SPA。概要タブにKPIタイル・タスクステータス構成・会議アクティビティ・プロジェクト別タスクのチャートを表示し、各タブで一覧＋クリックで詳細ドロワー（Notionページ本文込み）を閲覧できる
+- 各ページの**本文もNotionから同期**するため、通常の閲覧はサイト内で完結する（編集のみNotion側）
+- GitHub Actionsが3時間ごと・mainへのpush時・手動実行でNotion APIからデータを取得し、GitHub Pagesへ配信
 - Slackメンション/メール案件/政治家・重要人物ニュース追跡/ストック週次分析などは対象外（Notion側にそのまま残る）
 
 ## 構成
 
 ```
-sync/fetch-notion.js   Notion APIから5データソースを取得しweb/data/*.jsonを生成するスクリプト
-web/                    GitHub Pagesとして配信する静的サイト本体（index.html, matters.html, ...）
-.github/workflows/deploy.yml  定期実行＋Pagesデプロイ
+sync/fetch-notion.js   Notion APIから5データソース＋各ページ本文を取得しweb/data/*.jsonを生成するスクリプト
+web/index.html          タブ型SPA本体（matters.html等の旧ページはindex.htmlへのリダイレクト）
+web/assets/app.js       KPI・チャート・一覧・詳細ドロワーの描画ロジック
+.github/workflows/deploy.yml  push時＋定期実行＋手動実行でPagesデプロイ
 ```
 
 ## セットアップ手順

@@ -88,7 +88,7 @@ async function queryAll(databaseId) {
   return results;
 }
 
-// 上位1階層のブロックのみを簡易Markdown化する（トグル/子DB等の深い階層は非対応、リンクのみ表示）
+// ブロックを簡易Markdown行に変換する（子ブロックはfetchPageBody側でインデント付きで展開）
 function blockToLine(block) {
   const t = block.type;
   const rt = block[t]?.rich_text;
@@ -115,7 +115,7 @@ function blockToLine(block) {
     case "code":
       return `\`\`\`\n${text}\n\`\`\``;
     case "toggle":
-      return `${text}（トグル、詳細はNotion側を参照）`;
+      return `- ${text}`;
     case "divider":
       return "---";
     case "child_page":
@@ -127,25 +127,62 @@ function blockToLine(block) {
   }
 }
 
-async function fetchPageBody(pageId) {
-  const res = await notion.blocks.children.list({
-    block_id: pageId,
-    page_size: 100,
-  });
+async function listAllChildren(blockId) {
+  const results = [];
+  let cursor = undefined;
+  do {
+    const res = await notion.blocks.children.list({
+      block_id: blockId,
+      start_cursor: cursor,
+      page_size: 100,
+    });
+    results.push(...res.results);
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return results;
+}
+
+// ページ本文をMarkdown化。ネストしたブロック（トグル・リスト配下）はdepth=2までインデント付きで展開。
+async function fetchPageBody(pageId, depth = 0, maxDepth = 2) {
+  const blocks = await listAllChildren(pageId);
   const lines = [];
   const childPages = [];
-  for (const block of res.results) {
+  for (const block of blocks) {
     if (block.type === "child_page") {
       childPages.push({
         id: block.id,
         title: block.child_page?.title ?? "(無題ページ)",
         url: `https://www.notion.so/${block.id.replace(/-/g, "")}`,
       });
+      if (depth > 0) continue;
     }
     const line = blockToLine(block);
-    if (line !== null) lines.push(line);
+    if (line !== null && !(line === "" && depth > 0)) {
+      lines.push("  ".repeat(depth) + line);
+    }
+    if (
+      block.has_children &&
+      depth < maxDepth &&
+      block.type !== "child_page" &&
+      block.type !== "child_database"
+    ) {
+      const child = await fetchPageBody(block.id, depth + 1, maxDepth);
+      if (child.markdown) lines.push(child.markdown);
+    }
   }
   return { markdown: lines.join("\n"), childPages };
+}
+
+// ページ配列それぞれの本文を取得して body プロパティとして付与する
+async function attachBodies(pages, label) {
+  let i = 0;
+  for (const page of pages) {
+    i += 1;
+    const body = await fetchPageBody(page.id);
+    page.body = body.markdown;
+  }
+  console.log(`  ${label}: ${i}件の本文を取得`);
+  return pages;
 }
 
 // ダッシュボード先頭の「今週のフォーカス」セクション（最初のdividerまで）を抜き出す
@@ -180,6 +217,7 @@ async function main() {
 
   console.log("進行中案件を取得中...");
   const matters = (await queryAll(SOURCES.matters)).map(pagePropsToObject);
+  await attachBodies(matters, "進行中案件");
 
   console.log("TODOを取得中...");
   const tasks = (await queryAll(SOURCES.tasks)).map((page) => {
@@ -187,6 +225,9 @@ async function main() {
     obj["プロジェクト"] = resolveProjectRelation(obj["プロジェクト"]);
     return obj;
   });
+  await attachBodies(tasks, "TODO");
+
+  await attachBodies(projects, "プロジェクト");
 
   console.log("議事録を取得中...");
   const meetingPages = await queryAll(SOURCES.meetings);
@@ -194,16 +235,20 @@ async function main() {
   for (const page of meetingPages) {
     const obj = pagePropsToObject(page);
     obj["プロジェクト"] = resolveProjectRelation(obj["プロジェクト"]);
-    const body = await fetchPageBody(page.id);
-    obj.body = body.markdown;
     meetings.push(obj);
   }
+  await attachBodies(meetings, "議事録");
 
   console.log("ナレッジベースを取得中...");
   const kbBody = await fetchPageBody(KNOWLEDGE_PAGE_ID);
+  const articles = [];
+  for (const child of kbBody.childPages) {
+    const childBody = await fetchPageBody(child.id);
+    articles.push({ ...child, body: childBody.markdown });
+  }
   const knowledge = {
     body: kbBody.markdown,
-    articles: kbBody.childPages,
+    articles,
   };
 
   console.log("今週のフォーカスを取得中...");

@@ -3,35 +3,119 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>板橋 ダッシュボード（Viewer）</title>
+<title>板橋 ダッシュボード</title>
 <link rel="stylesheet" href="assets/style.css" />
 </head>
 <body>
 <header class="app-header">
-  <h1>📌 板橋 ダッシュボード（Viewer）</h1>
-  <nav class="app-nav"></nav>
-</header>
-<main>
-  <div class="meta-bar"></div>
-  <div id="weekly-focus" class="weekly-focus"></div>
-  <div class="nav-grid">
-    <a href="matters.html">📁 進行中案件<small>対応中の案件一覧</small></a>
-    <a href="tasks.html">✅ TODO<small>タスク一覧</small></a>
-    <a href="projects.html">🗂 プロジェクト管理<small>プロジェクト一覧</small></a>
-    <a href="meetings.html">📝 議事録<small>会議記録一覧</small></a>
-    <a href="knowledge.html">📚 ナレッジベース<small>資料・カテゴリ</small></a>
+  <div class="app-header-inner">
+    <div class="app-header-top">
+      <h1>📌 板橋 ダッシュボード</h1>
+      <div class="meta-bar">読み込み中…</div>
+    </div>
+    <nav class="tab-bar"></nav>
   </div>
-  <p style="margin-top:20px;"><a class="notion-link" id="notion-dashboard-link" href="#" target="_blank" rel="noopener">元のNotionダッシュボードを開く ↗</a></p>
+</header>
+
+<main>
+  <!-- 概要 -->
+  <section id="panel-overview" class="tab-panel">
+    <div id="kpi-row" class="kpi-row"></div>
+
+    <div class="card focus-card">
+      <h2>📌 今週のフォーカス</h2>
+      <div id="weekly-focus"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <h2>タスクステータス構成<small>全タスク</small></h2>
+        <div id="chart-task-status" class="chart-box"></div>
+      </div>
+      <div class="card">
+        <h2>会議アクティビティ<small>週別・直近12週の会議数</small></h2>
+        <div id="chart-meetings" class="chart-box"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>プロジェクト別タスク<small>未完了と完了の内訳</small></h2>
+      <div id="chart-projects" class="chart-box"></div>
+    </div>
+
+    <div class="card">
+      <h2>期日が近いタスク<small>クリックで詳細</small></h2>
+      <div id="overview-tasks"></div>
+    </div>
+
+    <div class="card">
+      <h2>最近の議事録<small>クリックで本文表示</small></h2>
+      <div id="overview-meetings"></div>
+    </div>
+  </section>
+
+  <!-- 進行中案件 -->
+  <section id="panel-matters" class="tab-panel">
+    <div class="card">
+      <h2>📁 進行中案件<small>クリックで詳細・本文</small></h2>
+      <div id="matters-filter" class="filter-row"></div>
+      <div id="matters-table"></div>
+    </div>
+  </section>
+
+  <!-- TODO -->
+  <section id="panel-tasks" class="tab-panel">
+    <div class="card">
+      <h2>✅ TODO<small>クリックで詳細・本文</small></h2>
+      <div id="tasks-filter" class="filter-row"></div>
+      <div id="tasks-table"></div>
+    </div>
+  </section>
+
+  <!-- プロジェクト -->
+  <section id="panel-projects" class="tab-panel">
+    <div class="card">
+      <h2>🗂 プロジェクト<small>クリックで詳細・関連タスク</small></h2>
+      <div id="projects-table"></div>
+    </div>
+  </section>
+
+  <!-- 議事録 -->
+  <section id="panel-meetings" class="tab-panel">
+    <div class="card">
+      <h2>📝 議事録<small>クリックで本文表示</small></h2>
+      <div id="meetings-filter" class="filter-row"></div>
+      <div id="meetings-table"></div>
+    </div>
+  </section>
+
+  <!-- ナレッジ -->
+  <section id="panel-knowledge" class="tab-panel">
+    <div class="card">
+      <h2>📚 ナレッジベース</h2>
+      <div id="kb-body"></div>
+    </div>
+    <div class="card">
+      <h2>記事<small>クリックで展開</small></h2>
+      <div id="kb-articles"></div>
+    </div>
+  </section>
 </main>
-<script type="module">
-import { renderNav, renderMetaBar } from "./assets/app.js";
-renderNav("index.html");
-renderMetaBar().then((meta) => {
-  if (!meta) return;
-  document.getElementById("weekly-focus").textContent = meta.weeklyFocus || "(今週のフォーカスは未設定です)";
-  const link = document.getElementById("notion-dashboard-link");
-  if (meta.dashboardUrl) link.href = meta.dashboardUrl;
-});
-</script>
+
+<footer>
+  データはNotionから3時間ごとに自動同期される読み取り専用スナップショットです。編集はNotion側で行ってください。
+</footer>
+
+<!-- 詳細ドロワー -->
+<div id="drawer-backdrop" class="drawer-backdrop"></div>
+<aside id="drawer" class="drawer" aria-label="詳細">
+  <div class="drawer-head">
+    <h3 id="drawer-title"></h3>
+    <button class="drawer-close" aria-label="閉じる">×</button>
+  </div>
+  <div id="drawer-content" class="drawer-body"></div>
+</aside>
+
+<script type="module" src="assets/app.js"></script>
 </body>
 </html>
