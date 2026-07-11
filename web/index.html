@@ -35,6 +35,11 @@
       <div id="today-list"></div>
     </div>
 
+    <div class="card" id="workload-card" style="display:none">
+      <h2>⏱ 今週の会議時間<small>自分のOutlook予定・案件別</small><small id="workload-total" style="float:right;color:var(--ink-2)"></small></h2>
+      <div id="workload-week" class="chart-box"></div>
+    </div>
+
     <div class="grid-2">
       <div class="card">
         <h2>タスクステータス構成<small>全タスク</small></h2>
@@ -109,6 +114,10 @@
     <div class="card">
       <h2>タスクタイムライン<small>直近5週間・プロジェクト別の期日</small></h2>
       <div id="timeline" class="chart-box"></div>
+    </div>
+    <div class="card" id="workload-weekly-card" style="display:none">
+      <h2>週別 会議時間<small>直近4週・自分のOutlook予定を案件別に集計</small></h2>
+      <div id="workload-weekly" class="chart-box"></div>
     </div>
   </section>
 

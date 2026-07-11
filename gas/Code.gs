@@ -37,7 +37,10 @@ function doPost(e) {
     if (body.action === "create") {
       return json_(createPage_(body.databaseId, body.props || {}));
     }
-    return json_({ ok: false, error: "不明なaction: " + body.action });
+    if (body.action === "archive") {
+      return json_(archivePage_(body.pageId));
+    }
+    return json_({ ok: false, error: "不明なaction: " + body.action + "（GASのコードが古い可能性があります。gas/Code.gsを貼り直して新バージョンをデプロイしてください）" });
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message ? err.message : err) });
   }
@@ -117,6 +120,13 @@ function createPage_(databaseId, updates) {
     properties: props,
   });
   return { ok: true, id: page.id, url: page.url };
+}
+
+// ページをNotionのゴミ箱に移動する（Notion側で30日以内なら復元可能）
+function archivePage_(pageId) {
+  if (!pageId) throw new Error("pageIdがありません");
+  notionFetch_("pages/" + pageId, "patch", { archived: true });
+  return { ok: true };
 }
 
 function json_(obj) {

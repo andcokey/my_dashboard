@@ -18,6 +18,8 @@
   --series-4: #008300;
   --series-5: #4a3aa7;
   --series-6: #e34948;
+  --series-7: #e87ba4;
+  --series-8: #eb6834;
   --gray-mark: #c3c2b7;
   --status-good: #0ca30c;
   --status-warning: #fab219;
@@ -44,6 +46,8 @@
     --series-4: #008300;
     --series-5: #9085e9;
     --series-6: #e66767;
+    --series-7: #d55181;
+    --series-8: #d95926;
     --gray-mark: #52514e;
     --good-text: #0ca30c;
     --shadow: none;
@@ -432,6 +436,8 @@ footer {
 }
 .btn-primary:hover { color: #fff; opacity: 0.9; }
 .btn-done { color: var(--good-text); border-color: var(--good-text); }
+.btn-danger { color: var(--status-critical); border-color: var(--status-critical); }
+.btn-danger:hover { color: #fff; background: var(--status-critical); }
 .icon-btn {
   background: none;
   border: none;

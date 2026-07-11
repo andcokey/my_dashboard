@@ -129,6 +129,7 @@ function rerenderAll() {
   renderOverview();
   renderPersonTabs();
   renderCalendarTab();
+  renderWorkload();
   renderMattersTab();
   renderTasksTab();
   renderProjectsTab();
@@ -504,6 +505,7 @@ function editFormHtml(item, rows, { withMemo = "メモ" } = {}) {
     <div class="edit-actions">
       <button type="submit" class="btn btn-primary">保存</button>
       ${item["ステータス"] !== "完了" ? `<button type="button" class="btn btn-done">✓ 完了にする</button>` : ""}
+      <button type="button" class="btn btn-danger">🗑 削除</button>
       <span class="edit-hint">${canEdit() ? "保存するとNotionに即時反映されます" : "編集には⚙設定で合言葉・編集URLの登録が必要です"}</span>
     </div>
   </form>`;
@@ -547,6 +549,36 @@ function bindEditForm(container, item, { onSaved, withMemo = "メモ" } = {}) {
     doneBtn.addEventListener("click", () => {
       form.elements["ステータス"].value = "完了";
       save({ ステータス: "完了" });
+    });
+  }
+  const delBtn = form.querySelector(".btn-danger");
+  if (delBtn) {
+    delBtn.addEventListener("click", async () => {
+      if (delBtn.dataset.confirm !== "1") {
+        delBtn.dataset.confirm = "1";
+        delBtn.textContent = "🗑 本当に削除する？（もう一度クリック）";
+        setTimeout(() => {
+          delBtn.dataset.confirm = "";
+          delBtn.textContent = "🗑 削除";
+        }, 4000);
+        return;
+      }
+      delBtn.disabled = true;
+      try {
+        await gasCall({ action: "archive", pageId: item.id });
+        // どのコレクションに属していても取り除く
+        for (const key of ["tasks", "matters", "projects", "meetings"]) {
+          const arr = state.data[key];
+          const i = arr.indexOf(item);
+          if (i >= 0) arr.splice(i, 1);
+        }
+        toast("削除しました（Notionのゴミ箱へ移動・30日以内は復元可能）");
+        closeDrawer();
+        rerenderAll();
+      } catch (e) {
+        toast(e.message, true);
+        delBtn.disabled = false;
+      }
     });
   }
 }
@@ -1264,6 +1296,168 @@ function renderPersonTab(person) {
 
 function renderPersonTabs() {
   PERSONS.forEach(renderPersonTab);
+}
+
+/* ---------------- 工数（会議時間）集計 ---------------- */
+
+const PROJ_SLOTS = [
+  "var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)",
+  "var(--series-5)", "var(--series-6)", "var(--series-7)", "var(--series-8)",
+];
+
+// プロジェクト名から照合キーワードを生成（長いもの優先で部分一致）
+function projectMatchers() {
+  const names = state.data.projects.map((p) => p["プロジェクト名"]).filter(Boolean);
+  const variants = [];
+  for (const name of names) {
+    variants.push([name, name]);
+    const stripped = name.replace(/(定例|関連|管理)$/, "");
+    if (stripped.length >= 2 && stripped !== name) variants.push([stripped, name]);
+  }
+  return variants.sort((a, b) => b[0].length - a[0].length);
+}
+
+function projColor(name) {
+  const names = state.data.projects.map((p) => p["プロジェクト名"]).filter(Boolean);
+  const i = names.indexOf(name);
+  return i >= 0 ? PROJ_SLOTS[i % PROJ_SLOTS.length] : "var(--gray-mark)";
+}
+
+function eventHours(ev) {
+  if (ev.allDay || !ev.end) return 0;
+  const ms = new Date(ev.end) - new Date(ev.start);
+  return ms > 0 && ms < 86400000 ? ms / 3600000 : 0;
+}
+
+function mondayOf(ymd) {
+  const d = new Date(ymd + "T00:00:00");
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return localYmdOf(d);
+}
+
+// owner（自分）の予定を直近nWeeks週×プロジェクト別に集計
+function computeWorkload(nWeeks = 4) {
+  const matchers = projectMatchers();
+  const weeks = [];
+  const cur = mondayOf(todayStr());
+  for (let i = nWeeks - 1; i >= 0; i--) {
+    const d = new Date(cur + "T00:00:00");
+    d.setDate(d.getDate() - i * 7);
+    weeks.push(localYmdOf(d));
+  }
+  const byWeek = new Map(weeks.map((w) => [w, new Map()]));
+  const events = (state.data.calendar?.events || []).filter(
+    (e) => e.owner && e.owner.includes(PERSONS[0].owner)
+  );
+  for (const ev of events) {
+    const h = eventHours(ev);
+    if (!h) continue;
+    const wk = mondayOf(ev.start.slice(0, 10));
+    if (!byWeek.has(wk)) continue;
+    const proj = matchers.find(([v]) => ev.title.includes(v))?.[1] ?? "その他";
+    const m = byWeek.get(wk);
+    m.set(proj, (m.get(proj) || 0) + h);
+  }
+  return { weeks, byWeek };
+}
+
+// 横バー（時間・案件別）
+function workloadBars(container, rows) {
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty-state">今週の会議はありません</div>`;
+    return;
+  }
+  const max = Math.max(...rows.map((r) => r.hours));
+  const W = 600, ROW_H = 28, LABEL = 110;
+  const innerW = W - LABEL - 64;
+  const H = rows.length * ROW_H + 4;
+  const parts = rows.map((r, i) => {
+    const y = i * ROW_H + 5;
+    const w = Math.max((r.hours / max) * innerW, 2);
+    return `
+      <text x="${LABEL - 8}" y="${y + 13}" text-anchor="end" font-size="11" fill="var(--ink-2)">${escapeHtml(r.name.length > 9 ? r.name.slice(0, 8) + "…" : r.name)}</text>
+      <rect x="${LABEL}" y="${y}" width="${w}" height="18" rx="4" fill="${r.color}" data-tip="${escapeHtml(`${r.name}: ${r.hours.toFixed(1)}時間`)}"></rect>
+      <text x="${LABEL + w + 6}" y="${y + 13}" font-size="11" fill="var(--ink-2)" font-variant-numeric="tabular-nums">${r.hours.toFixed(1)}h</text>`;
+  });
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="案件別会議時間">${parts.join("")}</svg>`;
+  bindTooltip(container.querySelector("svg"));
+}
+
+// 週別スタック棒（時間×案件）
+function stackedColumns(container, weekData) {
+  const totals = weekData.map((w) => w.segs.reduce((s, x) => s + x.value, 0));
+  if (!totals.some((t) => t > 0)) {
+    container.innerHTML = `<div class="empty-state">データがありません</div>`;
+    return;
+  }
+  const W = 600, H = 208, PAD_L = 34, PAD_B = 22, PAD_T = 18, GAP = 2;
+  const max = Math.max(...totals);
+  const innerH = H - PAD_T - PAD_B;
+  const innerW = W - PAD_L - 8;
+  const bw = Math.min(56, innerW / weekData.length - 16);
+  const grid = [];
+  const steps = 4;
+  for (let i = 1; i <= steps; i++) {
+    const v = (max / steps) * i;
+    const y = PAD_T + innerH - (v / max) * innerH;
+    grid.push(`<line x1="${PAD_L}" y1="${y}" x2="${W - 4}" y2="${y}" stroke="var(--grid)"></line>
+      <text x="${PAD_L - 5}" y="${y + 3.5}" text-anchor="end" font-size="10" fill="var(--muted)">${Math.round(v)}h</text>`);
+  }
+  const cols = weekData.map((w, i) => {
+    const cx = PAD_L + (innerW / weekData.length) * (i + 0.5);
+    let y = PAD_T + innerH;
+    const rects = w.segs
+      .filter((s) => s.value > 0)
+      .map((s) => {
+        const h = (s.value / max) * innerH;
+        y -= h;
+        const r = `<rect x="${cx - bw / 2}" y="${y}" width="${bw}" height="${Math.max(h - GAP, 1)}" rx="3" fill="${s.color}" data-tip="${escapeHtml(`${w.label} ${s.name}: ${s.value.toFixed(1)}時間`)}"></rect>`;
+        return r;
+      });
+    const total = totals[i];
+    return `${rects.join("")}
+      ${total ? `<text x="${cx}" y="${PAD_T + innerH - (total / max) * innerH - 5}" text-anchor="middle" font-size="10" fill="var(--ink-2)">${total.toFixed(0)}h</text>` : ""}
+      <text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${escapeHtml(w.label)}</text>`;
+  });
+  const legendNames = [...new Set(weekData.flatMap((w) => w.segs.filter((s) => s.value > 0).map((s) => s.name)))];
+  container.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="週別会議時間">
+      ${grid.join("")}
+      <line x1="${PAD_L}" y1="${PAD_T + innerH}" x2="${W - 4}" y2="${PAD_T + innerH}" stroke="var(--baseline)"></line>
+      ${cols.join("")}
+    </svg>
+    <div class="chart-legend">${legendNames
+      .map((n) => `<span class="key"><span class="swatch" style="background:${projColor(n)}"></span>${escapeHtml(n)}</span>`)
+      .join("")}</div>`;
+  bindTooltip(container.querySelector("svg"));
+}
+
+function renderWorkload() {
+  const card1 = document.getElementById("workload-card");
+  const card2 = document.getElementById("workload-weekly-card");
+  const hasEvents = (state.data.calendar?.events || []).some(
+    (e) => e.owner && e.owner.includes(PERSONS[0].owner)
+  );
+  card1.style.display = hasEvents ? "" : "none";
+  card2.style.display = hasEvents ? "" : "none";
+  if (!hasEvents) return;
+  const { weeks, byWeek } = computeWorkload(4);
+  // 今週（末尾の週）
+  const thisWeek = byWeek.get(weeks[weeks.length - 1]);
+  const rows = [...thisWeek.entries()]
+    .map(([name, hours]) => ({ name, hours, color: projColor(name) }))
+    .sort((a, b) => b.hours - a.hours);
+  const total = rows.reduce((s, r) => s + r.hours, 0);
+  document.getElementById("workload-total").textContent = total ? `合計 ${total.toFixed(1)}時間` : "";
+  workloadBars(document.getElementById("workload-week"), rows);
+  // 週別スタック
+  const weekData = weeks.map((w) => ({
+    label: `${Number(w.slice(5, 7))}/${Number(w.slice(8, 10))}週`,
+    segs: [...byWeek.get(w).entries()]
+      .map(([name, value]) => ({ name, value, color: projColor(name) }))
+      .sort((a, b) => (a.name === "その他") - (b.name === "その他") || b.value - a.value),
+  }));
+  stackedColumns(document.getElementById("workload-weekly"), weekData);
 }
 
 /* ---------------- 概要タブ ---------------- */
