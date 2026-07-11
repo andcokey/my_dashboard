@@ -1,0 +1,210 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --border: #e2e2e6;
+  --text: #1c1c1f;
+  --text-muted: #6b6b72;
+  --accent: #3457d5;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181c;
+    --surface: #212227;
+    --border: #34343a;
+    --text: #eceef1;
+    --text-muted: #9a9aa2;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", Segoe UI, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+header.app-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+header.app-header h1 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+nav.app-nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+nav.app-nav a {
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+nav.app-nav a.active,
+nav.app-nav a:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.meta-bar {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.filters select,
+.filters input {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+tr:hover td {
+  background: rgba(52, 87, 213, 0.06);
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: var(--border);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.badge.status-完了 { background: #2e7d3210; color: #2e7d32; }
+.badge.status-進行中 { background: #1565c010; color: #1565c0; }
+.badge.status-見送り { background: #6b6b7220; color: #6b6b72; }
+.badge.status-確認中,
+.badge.status-レビュー待ち,
+.badge.status-レビュー中 { background: #ef6c0010; color: #ef6c00; }
+.badge.status-待ち,
+.badge.status-先様待ち,
+.badge.status-準備中,
+.badge.status-企画中,
+.badge.status-未着手,
+.badge.status-保留 { background: #9e9d2410; color: #9e9d24; }
+
+a.notion-link {
+  font-size: 0.82rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a.notion-link:hover {
+  text-decoration: underline;
+}
+
+.empty-state {
+  color: var(--text-muted);
+  padding: 24px;
+  text-align: center;
+}
+
+pre.markdown-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.92rem;
+  margin: 0;
+}
+
+.weekly-focus {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+}
+
+.nav-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.nav-grid a {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.nav-grid a:hover {
+  border-color: var(--accent);
+}
+
+.nav-grid a small {
+  display: block;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-top: 4px;
+}

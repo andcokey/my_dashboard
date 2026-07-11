@@ -1,0 +1,13 @@
+{
+  "name": "itabashi-dashboard",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Notion「板橋 ダッシュボード」の読み取り専用ビューア（GitHub Pages配信）",
+  "scripts": {
+    "sync": "node sync/fetch-notion.js"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.15"
+  }
+}

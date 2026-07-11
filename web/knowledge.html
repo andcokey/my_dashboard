@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ナレッジベース | 板橋 ダッシュボード（Viewer）</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>📚 ナレッジベース</h1>
+  <nav class="app-nav"></nav>
+</header>
+<main>
+  <div class="meta-bar"></div>
+  <div class="card">
+    <pre id="kb-body" class="markdown-body"></pre>
+  </div>
+  <h3>記事一覧</h3>
+  <div id="articles-container" class="card"></div>
+</main>
+<script type="module">
+import { renderNav, renderMetaBar, loadJson, notionLink, escapeHtml } from "./assets/app.js";
+renderNav("knowledge.html");
+renderMetaBar();
+
+const articlesContainer = document.getElementById("articles-container");
+
+loadJson("knowledge").then((kb) => {
+  document.getElementById("kb-body").textContent = kb.body || "(本文なし)";
+  if (!kb.articles || !kb.articles.length) {
+    articlesContainer.innerHTML = `<div class="empty-state">まだ記事（サブページ）は作成されていません</div>`;
+    return;
+  }
+  articlesContainer.innerHTML = `<ul>${kb.articles
+    .map((a) => `<li>${escapeHtml(a.title)} ${notionLink(a.url)}</li>`)
+    .join("")}</ul>`;
+}).catch((e) => {
+  articlesContainer.innerHTML = `<div class="empty-state">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+});
+</script>
+</body>
+</html>

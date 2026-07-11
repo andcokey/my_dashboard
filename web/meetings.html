@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>議事録 | 板橋 ダッシュボード（Viewer）</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>📝 議事録</h1>
+  <nav class="app-nav"></nav>
+</header>
+<main>
+  <div class="meta-bar"></div>
+  <div class="filters">
+    <select id="status-filter"></select>
+  </div>
+  <div id="table-container" class="card"></div>
+  <div id="detail-container"></div>
+</main>
+<script type="module">
+import { renderNav, renderMetaBar, loadJson, renderTable, setupStatusFilter, statusBadge, fmtDate, notionLink, escapeHtml } from "./assets/app.js";
+renderNav("meetings.html");
+renderMetaBar();
+
+const detailContainer = document.getElementById("detail-container");
+let rowsById = new Map();
+
+function showDetail(id) {
+  const row = rowsById.get(id);
+  if (!row) return;
+  detailContainer.innerHTML = `
+    <div class="card">
+      <h3>${escapeHtml(row["会議名"])} ${notionLink(row.url)}</h3>
+      <pre class="markdown-body">${escapeHtml(row.body || "(本文なし)")}</pre>
+    </div>`;
+}
+window.showMeetingDetail = showDetail;
+
+const columns = [
+  { key: "会議名", label: "会議名", render: (r) => `<a href="#" onclick="showMeetingDetail('${r.id}');return false;">${escapeHtml(r["会議名"])}</a><br>${notionLink(r.url)}` },
+  { key: "ステータス", label: "ステータス", render: (r) => statusBadge(r["ステータス"]) },
+  { key: "会議種別", label: "会議種別" },
+  { key: "日時", label: "日時", render: (r) => fmtDate(r["日時"]) },
+  { key: "参加者", label: "参加者", render: (r) => (r["参加者"] || []).join(", ") },
+  { key: "プロジェクト", label: "プロジェクト", render: (r) => (r["プロジェクト"] || []).map((p) => escapeHtml(p.name || "(不明)")).join(", ") },
+];
+
+const container = document.getElementById("table-container");
+
+loadJson("meetings").then((rows) => {
+  rowsById = new Map(rows.map((r) => [r.id, r]));
+  renderTable(container, rows, columns);
+  setupStatusFilter(document.getElementById("status-filter"), rows, "ステータス", (filtered) =>
+    renderTable(container, filtered, columns)
+  );
+}).catch((e) => {
+  container.innerHTML = `<div class="empty-state">読み込みエラー: ${escapeHtml(e.message)}</div>`;
+});
+</script>
+</body>
+</html>

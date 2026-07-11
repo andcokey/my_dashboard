@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>板橋 ダッシュボード（Viewer）</title>
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<header class="app-header">
+  <h1>📌 板橋 ダッシュボード（Viewer）</h1>
+  <nav class="app-nav"></nav>
+</header>
+<main>
+  <div class="meta-bar"></div>
+  <div id="weekly-focus" class="weekly-focus"></div>
+  <div class="nav-grid">
+    <a href="matters.html">📁 進行中案件<small>対応中の案件一覧</small></a>
+    <a href="tasks.html">✅ TODO<small>タスク一覧</small></a>
+    <a href="projects.html">🗂 プロジェクト管理<small>プロジェクト一覧</small></a>
+    <a href="meetings.html">📝 議事録<small>会議記録一覧</small></a>
+    <a href="knowledge.html">📚 ナレッジベース<small>資料・カテゴリ</small></a>
+  </div>
+  <p style="margin-top:20px;"><a class="notion-link" id="notion-dashboard-link" href="#" target="_blank" rel="noopener">元のNotionダッシュボードを開く ↗</a></p>
+</main>
+<script type="module">
+import { renderNav, renderMetaBar } from "./assets/app.js";
+renderNav("index.html");
+renderMetaBar().then((meta) => {
+  if (!meta) return;
+  document.getElementById("weekly-focus").textContent = meta.weeklyFocus || "(今週のフォーカスは未設定です)";
+  const link = document.getElementById("notion-dashboard-link");
+  if (meta.dashboardUrl) link.href = meta.dashboardUrl;
+});
+</script>
+</body>
+</html>
