@@ -11,7 +11,10 @@
   <div class="app-header-inner">
     <div class="app-header-top">
       <h1>📌 板橋 ダッシュボード</h1>
-      <div class="meta-bar">読み込み中…</div>
+      <div class="header-right">
+        <div class="meta-bar">読み込み中…</div>
+        <button id="settings-btn" class="icon-btn" title="設定">⚙</button>
+      </div>
     </div>
     <nav class="tab-bar"></nav>
   </div>
@@ -23,8 +26,13 @@
     <div id="kpi-row" class="kpi-row"></div>
 
     <div class="card focus-card">
-      <h2>📌 今週のフォーカス</h2>
+      <h2>📌 今週のフォーカス<small>タスクから自動生成</small></h2>
       <div id="weekly-focus"></div>
+    </div>
+
+    <div class="card" id="today-card" style="display:none">
+      <h2>🗓 今日の予定</h2>
+      <div id="today-list"></div>
     </div>
 
     <div class="grid-2">
@@ -54,6 +62,56 @@
     </div>
   </section>
 
+  <!-- For me -->
+  <section id="panel-me" class="tab-panel">
+    <div class="grid-2">
+      <div class="card">
+        <h2>🗓 直近7日間の予定<small>Outlook</small></h2>
+        <div class="pv-schedule"></div>
+      </div>
+      <div class="card">
+        <h2>✅ 自分のタスク<small>未完了・期日順</small></h2>
+        <div class="pv-tasks"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- For 西山副社長 -->
+  <section id="panel-nishiyama" class="tab-panel">
+    <div class="grid-2">
+      <div class="card">
+        <h2>🗓 西山副社長 直近7日間の予定<small>Outlook</small></h2>
+        <div class="pv-schedule"></div>
+      </div>
+      <div class="card">
+        <h2>✅ 西山さん関連タスク<small>未完了</small></h2>
+        <div class="pv-tasks"></div>
+      </div>
+    </div>
+    <div class="card pv-extra"></div>
+  </section>
+
+  <!-- 予定表 -->
+  <section id="panel-calendar" class="tab-panel">
+    <div class="card">
+      <div class="cal-head">
+        <h2 id="cal-title" style="margin:0"></h2>
+        <div class="cal-nav">
+          <button class="btn" id="cal-prev">‹ 前月</button>
+          <button class="btn" id="cal-today-btn">今月</button>
+          <button class="btn" id="cal-next">次月 ›</button>
+        </div>
+      </div>
+      <div id="cal-filters" class="cal-filters"></div>
+      <div id="cal-grid" class="cal-grid"></div>
+      <p id="cal-note" class="section-note"></p>
+    </div>
+    <div class="card">
+      <h2>タスクタイムライン<small>直近5週間・プロジェクト別の期日</small></h2>
+      <div id="timeline" class="chart-box"></div>
+    </div>
+  </section>
+
   <!-- 進行中案件 -->
   <section id="panel-matters" class="tab-panel">
     <div class="card">
@@ -66,7 +124,10 @@
   <!-- TODO -->
   <section id="panel-tasks" class="tab-panel">
     <div class="card">
-      <h2>✅ TODO<small>クリックで詳細・本文</small></h2>
+      <div class="cal-head">
+        <h2 style="margin:0">✅ TODO<small>クリックで詳細・編集</small></h2>
+        <button class="btn btn-primary" id="task-add-btn">＋ 新規タスク</button>
+      </div>
       <div id="tasks-filter" class="filter-row"></div>
       <div id="tasks-table"></div>
     </div>
@@ -103,7 +164,7 @@
 </main>
 
 <footer>
-  データはNotionから3時間ごとに自動同期される読み取り専用スナップショットです。編集はNotion側で行ってください。
+  データはNotionと同期しています（3時間ごと自動＋編集時は即時反映）。タスク・案件・プロジェクトは詳細画面から直接編集できます。
 </footer>
 
 <!-- 詳細ドロワー -->
@@ -115,6 +176,36 @@
   </div>
   <div id="drawer-content" class="drawer-body"></div>
 </aside>
+
+<!-- ロック解除（パスワード保護時） -->
+<div id="unlock-overlay" class="modal-overlay">
+  <div class="modal">
+    <h3>🔒 板橋 ダッシュボード</h3>
+    <p>閲覧には合言葉が必要です。</p>
+    <input type="password" id="unlock-input" placeholder="合言葉" autocomplete="current-password">
+    <p id="unlock-error" class="modal-error"></p>
+    <button class="btn btn-primary" id="unlock-btn">開く</button>
+  </div>
+</div>
+
+<!-- 設定 -->
+<div id="settings-overlay" class="modal-overlay">
+  <div class="modal">
+    <h3>⚙ 設定</h3>
+    <label class="modal-label">合言葉（閲覧・編集の認証に使用）
+      <input type="password" id="setting-pass" autocomplete="current-password">
+    </label>
+    <label class="modal-label">編集エンドポイント（GASのURL・省略時は既定値）
+      <input type="text" id="setting-gas">
+    </label>
+    <div class="edit-actions">
+      <button class="btn btn-primary" id="settings-save">保存して再読み込み</button>
+      <button class="btn" id="settings-cancel">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
 
 <script type="module" src="assets/app.js"></script>
 </body>

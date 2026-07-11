@@ -37,6 +37,9 @@ jobs:
       - name: Fetch Notion data
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          CALENDAR_ICS: ${{ secrets.CALENDAR_ICS }}
+          GAS_ENDPOINT: ${{ vars.GAS_ENDPOINT }}
         run: npm run sync
 
       - name: Setup Pages

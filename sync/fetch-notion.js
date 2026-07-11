@@ -1,17 +1,27 @@
 // Notionから基幹5データソースを取得し、web/data/*.json として書き出す。
 // 読み取り専用ビューア用のスナップショット生成スクリプト（GitHub Actionsから定期実行 / ローカルでも手動実行可）。
 import { Client } from "@notionhq/client";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { encryptJson, decryptJson, isEncrypted } from "./crypto.js";
+import { parseIcs } from "./ics.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, "..", "web", "data");
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+const CALENDAR_ICS = process.env.CALENDAR_ICS || ""; // JSON: [{"name":"板橋","url":"https://..."}]
 if (!NOTION_TOKEN) {
   console.error("環境変数 NOTION_TOKEN が設定されていません。");
   process.exit(1);
+}
+
+// SITE_PASSWORD が設定されていれば暗号化して書き出す
+async function writeData(name, data) {
+  const payload = SITE_PASSWORD ? await encryptJson(data, SITE_PASSWORD) : data;
+  await writeFile(path.join(OUT_DIR, `${name}.json`), JSON.stringify(payload, null, SITE_PASSWORD ? 0 : 2));
 }
 
 const notion = new Client({ auth: NOTION_TOKEN });
@@ -200,6 +210,111 @@ async function fetchWeeklyFocus(pageId) {
   return lines.join("\n");
 }
 
+/* ---------- 今週のフォーカス自動生成（ルールベース） ---------- */
+// 「タイトル：一言でポイント」形式。今週期日＋期限超過の未完了タスクをプロジェクト別に集約する。
+function generateWeeklyFocus(tasks) {
+  const DONE = new Set(["完了", "見送り", "クローズ"]);
+  const jstNow = new Date(Date.now() + 9 * 3600000);
+  const todayStr = jstNow.toISOString().slice(0, 10);
+  const dow = (jstNow.getUTCDay() + 6) % 7; // 月曜=0
+  const weekEnd = new Date(jstNow.getTime() + (6 - dow) * 86400000);
+  const weekEndStr = weekEnd.toISOString().slice(0, 10);
+
+  const relevant = tasks.filter((t) => {
+    if (DONE.has(t["ステータス"])) return false;
+    const due = t["期日"]?.start?.slice(0, 10);
+    return due && due <= weekEndStr;
+  });
+  if (!relevant.length) return "- 今週：期日が今週のタスクはありません。仕込みと整理に充てる。";
+
+  const priNum = (p) => {
+    const n = parseInt(p, 10);
+    return Number.isNaN(n) ? 9 : n;
+  };
+  const groups = new Map();
+  for (const t of relevant) {
+    const proj = t["プロジェクト"]?.[0]?.name || "その他";
+    if (!groups.has(proj)) groups.set(proj, []);
+    groups.get(proj).push(t);
+  }
+  const lines = [];
+  const sorted = [...groups.entries()].sort((a, b) => {
+    const over = (arr) => arr.filter((t) => t["期日"].start.slice(0, 10) < todayStr).length;
+    return over(b[1]) - over(a[1]) || b[1].length - a[1].length;
+  });
+  for (const [proj, list] of sorted) {
+    list.sort(
+      (a, b) =>
+        priNum(a["優先度"]) - priNum(b["優先度"]) ||
+        a["期日"].start.localeCompare(b["期日"].start)
+    );
+    const top = list[0];
+    const overdue = list.filter((t) => t["期日"].start.slice(0, 10) < todayStr).length;
+    const extras = [];
+    if (list.length > 1) extras.push(`ほか${list.length - 1}件`);
+    if (overdue) extras.push(`⚠期限超過${overdue}件`);
+    const name = (top["タスク名"] || "").replace(/^【[^】]*】/, "");
+    lines.push(`- ${proj}：${name}を完了させる${extras.length ? `（${extras.join("、")}）` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+/* ---------- 予定表（Outlook）データの組み立て ---------- */
+// ソース1: CALENDAR_ICS（Outlook「予定表の公開」のICS URL、3時間ごと自動）
+// ソース2: sync/calendar-snapshot.enc.json（Claude(MCP)が取得・暗号化してコミットするスナップショット）
+async function buildCalendar() {
+  const windowStart = new Date(Date.now() - 14 * 86400000);
+  const windowEnd = new Date(Date.now() + 42 * 86400000);
+  let events = [];
+  let sources = [];
+
+  if (CALENDAR_ICS) {
+    try {
+      const feeds = JSON.parse(CALENDAR_ICS);
+      for (const feed of feeds) {
+        try {
+          const res = await fetch(feed.url);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          const evs = parseIcs(text, feed.name, windowStart, windowEnd);
+          events.push(...evs);
+          sources.push(`ics:${feed.name}(${evs.length})`);
+        } catch (e) {
+          console.warn(`ICS取得失敗 (${feed.name}):`, e.message);
+        }
+      }
+    } catch (e) {
+      console.warn("CALENDAR_ICS のJSONが不正です:", e.message);
+    }
+  }
+
+  try {
+    const raw = JSON.parse(
+      await readFile(path.join(__dirname, "calendar-snapshot.enc.json"), "utf8")
+    );
+    const snap = isEncrypted(raw)
+      ? SITE_PASSWORD
+        ? await decryptJson(raw, SITE_PASSWORD)
+        : null
+      : raw;
+    if (snap?.events) {
+      // ICSで既にカバーされているowner分は重複させない
+      const icsOwners = new Set(events.map((e) => e.owner));
+      const extra = snap.events.filter((e) => !icsOwners.has(e.owner));
+      events.push(...extra);
+      sources.push(`snapshot(${extra.length}, ${snap.fetchedAt ?? "?"})`);
+    } else if (snap === null) {
+      console.warn("calendar-snapshot: SITE_PASSWORD未設定のため復号できません");
+    }
+  } catch {
+    // スナップショットなしは正常
+  }
+
+  events.sort((a, b) => a.start.localeCompare(b.start));
+  console.log(`予定表: ${events.length}件 [${sources.join(", ") || "ソースなし"}]`);
+  return { updatedAt: new Date().toISOString(), events };
+}
+
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -254,39 +369,37 @@ async function main() {
   console.log("今週のフォーカスを取得中...");
   const weeklyFocus = await fetchWeeklyFocus(DASHBOARD_ROOT_PAGE_ID);
 
+  console.log("予定表を組み立て中...");
+  const calendar = await buildCalendar();
+
   const meta = {
     syncedAt: new Date().toISOString(),
     weeklyFocus,
+    generatedFocus: generateWeeklyFocus(tasks),
+    editEndpoint: process.env.GAS_ENDPOINT || "",
+    protected: !!SITE_PASSWORD,
     dashboardUrl: `https://www.notion.so/${DASHBOARD_ROOT_PAGE_ID.replace(
       /-/g,
       ""
     )}`,
+    sources: {
+      tasks: SOURCES.tasks,
+      matters: SOURCES.matters,
+      projects: SOURCES.projects,
+      meetings: SOURCES.meetings,
+    },
   };
 
-  await writeFile(
-    path.join(OUT_DIR, "matters.json"),
-    JSON.stringify(matters, null, 2)
-  );
-  await writeFile(
-    path.join(OUT_DIR, "tasks.json"),
-    JSON.stringify(tasks, null, 2)
-  );
-  await writeFile(
-    path.join(OUT_DIR, "projects.json"),
-    JSON.stringify(projects, null, 2)
-  );
-  await writeFile(
-    path.join(OUT_DIR, "meetings.json"),
-    JSON.stringify(meetings, null, 2)
-  );
-  await writeFile(
-    path.join(OUT_DIR, "knowledge.json"),
-    JSON.stringify(knowledge, null, 2)
-  );
-  await writeFile(path.join(OUT_DIR, "meta.json"), JSON.stringify(meta, null, 2));
+  await writeData("matters", matters);
+  await writeData("tasks", tasks);
+  await writeData("projects", projects);
+  await writeData("meetings", meetings);
+  await writeData("knowledge", knowledge);
+  await writeData("calendar", calendar);
+  await writeData("meta", meta);
 
   console.log(
-    `完了: matters=${matters.length} tasks=${tasks.length} projects=${projects.length} meetings=${meetings.length}`
+    `完了: matters=${matters.length} tasks=${tasks.length} projects=${projects.length} meetings=${meetings.length} calendar=${calendar.events.length}${SITE_PASSWORD ? "（暗号化あり）" : "（平文）"}`
   );
 }
 

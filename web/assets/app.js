@@ -2,6 +2,9 @@
 
 const TABS = [
   { id: "overview", label: "概要" },
+  { id: "me", label: "For me" },
+  { id: "nishiyama", label: "For 西山副社長" },
+  { id: "calendar", label: "予定表" },
   { id: "matters", label: "進行中案件" },
   { id: "tasks", label: "TODO" },
   { id: "projects", label: "プロジェクト" },
@@ -9,7 +12,128 @@ const TABS = [
   { id: "knowledge", label: "ナレッジ" },
 ];
 
-const state = { data: null };
+// パーソナルビュー設定。owner はOutlook予定のowner名との部分一致、keywords は関連項目の抽出条件。
+const PERSONS = [
+  { id: "me", owner: "板橋", keywords: null }, // null = 自分のタスクは全件対象
+  { id: "nishiyama", owner: "西山", keywords: ["西山"] },
+];
+
+const state = { data: null, calMonth: null };
+
+/* ---------------- 復号（パスワード保護） ---------------- */
+
+function getPass() {
+  return localStorage.getItem("dash_pass") || "";
+}
+
+async function decryptJson(payload, password) {
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const base = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: unb64(payload.salt), iterations: payload.iter || 150000, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+  );
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: unb64(payload.iv) }, key, unb64(payload.ct)
+  );
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+const isEncrypted = (obj) => !!(obj && obj.__enc === 1 && obj.ct);
+
+// 暗号化データがあれば合言葉入力を待って復号する
+async function resolveData(rawMap) {
+  const names = Object.keys(rawMap);
+  if (!names.some((n) => isEncrypted(rawMap[n]))) return rawMap;
+  let pass = getPass();
+  const probe = names.find((n) => isEncrypted(rawMap[n]));
+  while (true) {
+    if (pass) {
+      try {
+        await decryptJson(rawMap[probe], pass);
+        localStorage.setItem("dash_pass", pass);
+        break;
+      } catch {
+        pass = "";
+      }
+    }
+    pass = await askPassphrase();
+  }
+  const out = {};
+  for (const n of names) {
+    out[n] = isEncrypted(rawMap[n]) ? await decryptJson(rawMap[n], pass) : rawMap[n];
+  }
+  return out;
+}
+
+function askPassphrase() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("unlock-overlay");
+    overlay.classList.add("open");
+    const input = document.getElementById("unlock-input");
+    const btn = document.getElementById("unlock-btn");
+    const err = document.getElementById("unlock-error");
+    if (getPass()) err.textContent = "合言葉が違います。もう一度入力してください。";
+    input.value = "";
+    input.focus();
+    const submit = () => {
+      if (!input.value) return;
+      overlay.classList.remove("open");
+      btn.removeEventListener("click", submit);
+      input.removeEventListener("keydown", onKey);
+      resolve(input.value);
+    };
+    const onKey = (e) => { if (e.key === "Enter") submit(); };
+    btn.addEventListener("click", submit);
+    input.addEventListener("keydown", onKey);
+  });
+}
+
+/* ---------------- 編集API（GASプロキシ） ---------------- */
+
+function gasUrl() {
+  return localStorage.getItem("dash_gas_url") || state.data?.meta?.editEndpoint || "";
+}
+
+function canEdit() {
+  return !!(gasUrl() && getPass());
+}
+
+async function gasCall(body) {
+  const url = gasUrl();
+  if (!url) throw new Error("編集エンドポイント未設定です（⚙設定から登録してください）");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ token: getPass(), ...body }),
+    redirect: "follow",
+  });
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "更新に失敗しました");
+  return data;
+}
+
+let toastTimer = null;
+function toast(msg, isError = false) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.toggle("error", isError);
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 3500);
+}
+
+function rerenderAll() {
+  renderOverview();
+  renderPersonTabs();
+  renderCalendarTab();
+  renderMattersTab();
+  renderTasksTab();
+  renderProjectsTab();
+  renderMeetingsTab();
+}
 
 /* ---------------- ユーティリティ ---------------- */
 
@@ -323,7 +447,7 @@ function notionLink(url, label = "Notionで開く") {
   return `<a class="notion-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${label} ↗</a>`;
 }
 
-function openDrawer(title, propsHtml, bodyMd, url, extraHtml = "") {
+function openDrawer(title, propsHtml, bodyMd, url, extraHtml = "", bind = null) {
   document.getElementById("drawer-title").textContent = title;
   const bodyHtml =
     bodyMd === undefined
@@ -337,6 +461,174 @@ function openDrawer(title, propsHtml, bodyMd, url, extraHtml = "") {
     ${extraHtml}`;
   document.getElementById("drawer").classList.add("open");
   document.getElementById("drawer-backdrop").classList.add("open");
+  if (bind) bind(document.getElementById("drawer-content"));
+}
+
+/* ---------------- 編集フォーム ---------------- */
+
+const TASK_STATUSES = ["未着手", "進行中", "レビュー待ち", "完了", "見送り"];
+
+function statusOptions(rows, current) {
+  const set = new Set(TASK_STATUSES);
+  rows.forEach((r) => r["ステータス"] && set.add(r["ステータス"]));
+  return [...set]
+    .map((s) => `<option value="${escapeHtml(s)}" ${s === current ? "selected" : ""}>${escapeHtml(s)}</option>`)
+    .join("");
+}
+
+function priOptions(current) {
+  const n = priNumber(current);
+  return `<option value="">なし</option>` + [1, 2, 3]
+    .map((p) => `<option value="${p}" ${p === n ? "selected" : ""}>P${p}</option>`)
+    .join("");
+}
+
+// item: 対象行 / rows: 同種の全行（ステータス候補用） / fields: 表示フィールド設定
+function editFormHtml(item, rows, { withMemo = "メモ" } = {}) {
+  return `
+  <form class="edit-form">
+    <div class="edit-grid">
+      <label>ステータス
+        <select name="ステータス"><option value="">未設定</option>${statusOptions(rows, item["ステータス"])}</select>
+      </label>
+      <label>優先度
+        <select name="優先度">${priOptions(item["優先度"])}</select>
+      </label>
+      <label>期日
+        <input type="date" name="期日" value="${escapeHtml(dateStart(item["期日"]) || "")}">
+      </label>
+    </div>
+    ${withMemo ? `<label class="edit-wide">${escapeHtml(withMemo)}
+      <input type="text" name="${escapeHtml(withMemo)}" value="${escapeHtml(item[withMemo] || "")}">
+    </label>` : ""}
+    <div class="edit-actions">
+      <button type="submit" class="btn btn-primary">保存</button>
+      ${item["ステータス"] !== "完了" ? `<button type="button" class="btn btn-done">✓ 完了にする</button>` : ""}
+      <span class="edit-hint">${canEdit() ? "保存するとNotionに即時反映されます" : "編集には⚙設定で合言葉・編集URLの登録が必要です"}</span>
+    </div>
+  </form>`;
+}
+
+function bindEditForm(container, item, { onSaved, withMemo = "メモ" } = {}) {
+  const form = container.querySelector(".edit-form");
+  if (!form) return;
+  const save = async (overrides = {}) => {
+    const props = {
+      ステータス: form.elements["ステータス"].value,
+      優先度: form.elements["優先度"].value,
+      期日: form.elements["期日"].value,
+      ...(withMemo && form.elements[withMemo] ? { [withMemo]: form.elements[withMemo].value } : {}),
+      ...overrides,
+    };
+    const btns = form.querySelectorAll("button");
+    btns.forEach((b) => (b.disabled = true));
+    try {
+      await gasCall({ action: "update", pageId: item.id, props });
+      // ローカルにも反映
+      if (props["ステータス"] !== undefined) item["ステータス"] = props["ステータス"] || null;
+      if (props["優先度"] !== undefined) item["優先度"] = props["優先度"] || null;
+      if (props["期日"] !== undefined) item["期日"] = props["期日"] ? { start: props["期日"], end: null } : null;
+      if (withMemo && props[withMemo] !== undefined) item[withMemo] = props[withMemo];
+      toast("保存しました（Notionに反映済み）");
+      rerenderAll();
+      if (onSaved) onSaved(item);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btns.forEach((b) => (b.disabled = false));
+    }
+  };
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    save();
+  });
+  const doneBtn = form.querySelector(".btn-done");
+  if (doneBtn) {
+    doneBtn.addEventListener("click", () => {
+      form.elements["ステータス"].value = "完了";
+      save({ ステータス: "完了" });
+    });
+  }
+}
+
+// 新規タスク作成フォーム
+function openCreateTask() {
+  const projects = state.data.projects;
+  const projectOpts = `<option value="">なし</option>` + projects
+    .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p["プロジェクト名"])}</option>`)
+    .join("");
+  document.getElementById("drawer-title").textContent = "＋ 新規タスク";
+  document.getElementById("drawer-content").innerHTML = `
+    <form class="edit-form" id="create-task-form">
+      <label class="edit-wide">タスク名
+        <input type="text" name="タスク名" required placeholder="例：【お名前】引継ぎ資料の確認">
+      </label>
+      <div class="edit-grid">
+        <label>ステータス
+          <select name="ステータス">${statusOptions(state.data.tasks, "未着手")}</select>
+        </label>
+        <label>優先度
+          <select name="優先度">${priOptions(null)}</select>
+        </label>
+        <label>期日
+          <input type="date" name="期日">
+        </label>
+      </div>
+      <div class="edit-grid">
+        <label>プロジェクト
+          <select name="プロジェクト">${projectOpts}</select>
+        </label>
+      </div>
+      <label class="edit-wide">メモ
+        <input type="text" name="メモ">
+      </label>
+      <div class="edit-actions">
+        <button type="submit" class="btn btn-primary">作成</button>
+        <span class="edit-hint">${canEdit() ? "NotionのTODOデータベースに追加されます" : "作成には⚙設定で合言葉・編集URLの登録が必要です"}</span>
+      </div>
+    </form>`;
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-backdrop").classList.add("open");
+  const form = document.getElementById("create-task-form");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dbId = state.data.meta?.sources?.tasks;
+    if (!dbId) { toast("データベースIDが不明です（次回同期後に利用可能）", true); return; }
+    const projId = form.elements["プロジェクト"].value;
+    const props = {
+      タスク名: form.elements["タスク名"].value,
+      ステータス: form.elements["ステータス"].value,
+      優先度: form.elements["優先度"].value,
+      期日: form.elements["期日"].value,
+      メモ: form.elements["メモ"].value,
+      ...(projId ? { プロジェクト: [projId] } : {}),
+    };
+    const btn = form.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      const res = await gasCall({ action: "create", databaseId: dbId, props });
+      state.data.tasks.push({
+        id: res.id,
+        url: res.url,
+        タスク名: props["タスク名"],
+        ステータス: props["ステータス"] || null,
+        優先度: props["優先度"] || null,
+        期日: props["期日"] ? { start: props["期日"], end: null } : null,
+        メモ: props["メモ"],
+        プロジェクト: projId
+          ? [{ id: projId, name: projects.find((p) => p.id === projId)?.["プロジェクト名"] ?? null }]
+          : [],
+        body: "",
+      });
+      toast("タスクを作成しました");
+      rerenderAll();
+      closeDrawer();
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 function closeDrawer() {
@@ -354,24 +646,20 @@ function propGrid(pairs) {
 function openTaskDetail(t) {
   openDrawer(t["タスク名"] || "(無題)", propGrid([
     ["ID", escapeHtml(t["ID"])],
-    ["ステータス", statusBadge(t["ステータス"])],
-    ["優先度", priBadge(t["優先度"])],
-    ["期日", dueCell(t)],
     ["担当者", escapeHtml(peopleText(t["担当者"]))],
     ["プロジェクト", escapeHtml(projectNames(t))],
-    ["メモ", escapeHtml(t["メモ"])],
-  ]), t.body, t.url);
+  ]) + editFormHtml(t, state.data.tasks),
+  t.body, t.url, "",
+  (c) => bindEditForm(c, t));
 }
 
 function openMatterDetail(m) {
   openDrawer(m["案件名"] || "(無題)", propGrid([
-    ["ステータス", statusBadge(m["ステータス"])],
-    ["優先度", priBadge(m["優先度"])],
-    ["期日", dueCell(m)],
     ["担当者", escapeHtml(peopleText(m["担当者"]))],
     ["ラベル", escapeHtml(peopleText(m["ラベル"]))],
-    ["メモ", escapeHtml(m["メモ"])],
-  ]), m.body, m.url);
+  ]) + editFormHtml(m, state.data.matters),
+  m.body, m.url, "",
+  (c) => bindEditForm(c, m));
 }
 
 function openProjectDetail(p) {
@@ -387,13 +675,11 @@ function openProjectDetail(p) {
     : "";
   openDrawer(p["プロジェクト名"] || "(無題)", propGrid([
     ["ID", escapeHtml(p["ID"])],
-    ["ステータス", statusBadge(p["ステータス"])],
-    ["優先度", priBadge(p["優先度"])],
     ["開始日", escapeHtml(fmtDate(p["開始日"]))],
-    ["期日", escapeHtml(fmtDate(p["期日"]))],
     ["担当者", escapeHtml(peopleText(p["担当者"]))],
-    ["概要", escapeHtml(p["概要"])],
-  ]), p.body, p.url, taskList);
+  ]) + editFormHtml(p, state.data.projects, { withMemo: "概要" }),
+  p.body, p.url, taskList,
+  (c) => bindEditForm(c, p, { withMemo: "概要" }));
 }
 
 function openMeetingDetail(m) {
@@ -494,6 +780,11 @@ const TASK_COLUMNS = [
 function renderTasksTab() {
   const tasks = sortTasks(state.data.tasks);
   const tableEl = document.getElementById("tasks-table");
+  const addBtn = document.getElementById("task-add-btn");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", openCreateTask);
+  }
   setupFilters(
     document.getElementById("tasks-filter"),
     tasks,
@@ -604,6 +895,377 @@ function renderKnowledgeTab() {
     .join("");
 }
 
+/* ---------------- 予定表タブ ---------------- */
+
+const OWNER_SLOTS = ["var(--series-1)", "var(--series-5)", "var(--series-3)", "var(--series-7, var(--series-6))"];
+
+function calOwners() {
+  const evs = state.data.calendar?.events || [];
+  return [...new Set(evs.map((e) => e.owner))];
+}
+
+function ownerColor(owner) {
+  const i = calOwners().indexOf(owner);
+  return OWNER_SLOTS[i % OWNER_SLOTS.length];
+}
+
+function localYmdOf(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function ensureCalFilters() {
+  if (!state.calFilters) {
+    state.calFilters = new Set(["tasks", "meetings", ...calOwners().map((o) => `ev:${o}`)]);
+  }
+  return state.calFilters;
+}
+
+// その日のアイテム（予定・タスク期日・議事録）をまとめる
+function itemsForDay(ymd) {
+  const items = [];
+  const filters = ensureCalFilters();
+  for (const ev of state.data.calendar?.events || []) {
+    if (!filters.has(`ev:${ev.owner}`)) continue;
+    const s = ev.start.slice(0, 10);
+    let e = (ev.end || ev.start).slice(0, 10);
+    if (ev.allDay && e > s) {
+      // 終日イベントのDTENDは排他的なので1日戻す
+      const d = new Date(e + "T00:00:00");
+      d.setDate(d.getDate() - 1);
+      e = localYmdOf(d);
+    }
+    if (e < s) e = s;
+    if (ymd >= s && ymd <= e) {
+      items.push({ kind: "event", time: ev.allDay ? "" : ev.start.slice(11, 16), title: ev.title, ev });
+    }
+  }
+  if (state.calFilters.has("tasks")) {
+    for (const t of state.data.tasks) {
+      if (isDone(t)) continue;
+      if (dateStart(t["期日"]) === ymd) items.push({ kind: "task", time: "", title: t["タスク名"], t });
+    }
+  }
+  if (state.calFilters.has("meetings")) {
+    for (const m of state.data.meetings) {
+      if (dateStart(m["日時"]) === ymd) items.push({ kind: "meeting", time: "", title: m["会議名"], m });
+    }
+  }
+  items.sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
+  return items;
+}
+
+function renderCalendarTab() {
+  const cal = state.data.calendar;
+  const owners = calOwners();
+  ensureCalFilters();
+  if (!state.calMonth) state.calMonth = todayStr().slice(0, 7);
+
+  // 月送り
+  const prevBtn = document.getElementById("cal-prev");
+  if (!prevBtn.dataset.bound) {
+    prevBtn.dataset.bound = "1";
+    const shift = (n) => {
+      const [y, m] = state.calMonth.split("-").map(Number);
+      const d = new Date(y, m - 1 + n, 1);
+      state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      renderCalendarGrid();
+    };
+    prevBtn.addEventListener("click", () => shift(-1));
+    document.getElementById("cal-next").addEventListener("click", () => shift(1));
+    document.getElementById("cal-today-btn").addEventListener("click", () => {
+      state.calMonth = todayStr().slice(0, 7);
+      renderCalendarGrid();
+    });
+  }
+
+  // フィルタ
+  const filterEl = document.getElementById("cal-filters");
+  filterEl.innerHTML = [
+    ...owners.map((o, i) => ({ key: `ev:${o}`, label: `📅 ${o}`, color: ownerColor(o) })),
+    { key: "tasks", label: "✅ タスク期日", color: "var(--status-serious)" },
+    { key: "meetings", label: "📝 議事録", color: "var(--gray-mark)" },
+  ]
+    .map(
+      (f) => `<label class="cal-filter"><input type="checkbox" data-key="${escapeHtml(f.key)}" ${state.calFilters.has(f.key) ? "checked" : ""}>
+        <span class="swatch" style="background:${f.color}"></span>${escapeHtml(f.label)}</label>`
+    )
+    .join("");
+  filterEl.querySelectorAll("input").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      cb.checked ? state.calFilters.add(cb.dataset.key) : state.calFilters.delete(cb.dataset.key);
+      renderCalendarGrid();
+    });
+  });
+
+  const note = document.getElementById("cal-note");
+  if (!cal || !cal.events?.length) {
+    note.innerHTML = `Outlook予定はまだ取り込まれていません。設定手順はREADME参照（タスク期日・議事録は表示されます）。`;
+  } else {
+    note.textContent = `Outlook予定 ${cal.events.length}件（取得: ${new Date(cal.updatedAt).toLocaleString("ja-JP")}）`;
+  }
+
+  renderCalendarGrid();
+  renderTimeline();
+}
+
+function renderCalendarGrid() {
+  const [y, mo] = state.calMonth.split("-").map(Number);
+  document.getElementById("cal-title").textContent = `${y}年${mo}月`;
+  const first = new Date(y, mo - 1, 1);
+  const startOffset = (first.getDay() + 6) % 7; // 月曜=0
+  const gridStart = new Date(y, mo - 1, 1 - startOffset);
+  const today = todayStr();
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    const ymd = localYmdOf(d);
+    const inMonth = d.getMonth() === mo - 1;
+    const items = itemsForDay(ymd);
+    const chips = items.slice(0, 4).map((it) => {
+      if (it.kind === "event") {
+        return `<div class="cal-chip" style="--chip:${ownerColor(it.ev.owner)}" data-day="${ymd}">${it.time ? `<span class="chip-time">${it.time}</span>` : ""}${escapeHtml(it.title)}</div>`;
+      }
+      if (it.kind === "task") {
+        const over = ymd < today;
+        return `<div class="cal-chip chip-task ${over ? "chip-over" : ""}" data-day="${ymd}">✅ ${escapeHtml(it.title)}</div>`;
+      }
+      return `<div class="cal-chip chip-meeting" data-day="${ymd}">📝 ${escapeHtml(it.title)}</div>`;
+    });
+    if (items.length > 4) chips.push(`<div class="cal-more" data-day="${ymd}">＋${items.length - 4}件</div>`);
+    const dow = i % 7;
+    cells.push(`<div class="cal-cell ${inMonth ? "" : "cal-out"} ${ymd === today ? "cal-today" : ""} ${dow >= 5 ? "cal-weekend" : ""}" data-day="${ymd}">
+      <div class="cal-date">${d.getDate()}</div>${chips.join("")}
+    </div>`);
+  }
+  const grid = document.getElementById("cal-grid");
+  grid.innerHTML =
+    ["月", "火", "水", "木", "金", "土", "日"].map((w) => `<div class="cal-dow">${w}</div>`).join("") +
+    cells.join("");
+  grid.querySelectorAll(".cal-cell").forEach((cell) => {
+    cell.addEventListener("click", () => openDayDetail(cell.dataset.day));
+  });
+}
+
+function openDayDetail(ymd) {
+  const items = itemsForDay(ymd);
+  const d = new Date(ymd + "T00:00:00");
+  const w = ["日", "月", "火", "水", "木", "金", "土"][d.getDay()];
+  document.getElementById("drawer-title").textContent = `${ymd}（${w}）`;
+  document.getElementById("drawer-content").innerHTML = items.length
+    ? `<ul class="day-list">${items
+        .map((it, i) => {
+          if (it.kind === "event")
+            return `<li><span class="day-time">${it.time || "終日"}</span><span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>${escapeHtml(it.title)}${it.ev.location ? `<small class="day-loc">${escapeHtml(it.ev.location)}</small>` : ""}</li>`;
+          if (it.kind === "task")
+            return `<li class="day-click" data-i="${i}"><span class="day-time">期日</span>✅ ${escapeHtml(it.title)} ${statusBadge(it.t["ステータス"])}</li>`;
+          return `<li class="day-click" data-i="${i}"><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
+        })
+        .join("")}</ul>`
+    : `<div class="empty-state">予定はありません</div>`;
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawer-backdrop").classList.add("open");
+  document.querySelectorAll("#drawer-content .day-click").forEach((li) => {
+    li.addEventListener("click", () => {
+      const it = items[Number(li.dataset.i)];
+      if (it.kind === "task") openTaskDetail(it.t);
+      else if (it.kind === "meeting") openMeetingDetail(it.m);
+    });
+  });
+}
+
+// タスクタイムライン（今日±: プロジェクト行 × 期日マーカー）
+function renderTimeline() {
+  const container = document.getElementById("timeline");
+  const open = state.data.tasks.filter((t) => !isDone(t) && dateStart(t["期日"]));
+  if (!open.length) {
+    container.innerHTML = `<div class="empty-state">期日つきの未完了タスクはありません</div>`;
+    return;
+  }
+  const today = new Date(todayStr() + "T00:00:00");
+  const start = new Date(today); start.setDate(start.getDate() - 7);
+  const end = new Date(today); end.setDate(end.getDate() + 28);
+  const spanMs = end - start;
+  const groups = new Map();
+  for (const t of open) {
+    const proj = projectNames(t) || "その他";
+    if (!groups.has(proj)) groups.set(proj, []);
+    groups.get(proj).push(t);
+  }
+  const rows = [...groups.entries()];
+  const W = 720, LABEL = 120, ROW_H = 30, TOP = 22;
+  const innerW = W - LABEL - 16;
+  const H = TOP + rows.length * ROW_H + 8;
+  const xOf = (dstr) => {
+    const ms = new Date(dstr + "T00:00:00") - start;
+    return LABEL + Math.max(0, Math.min(1, ms / spanMs)) * innerW;
+  };
+  // 週の目盛り
+  const ticks = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 7)) {
+    const x = xOf(localYmdOf(d));
+    ticks.push(`<line x1="${x}" y1="${TOP - 6}" x2="${x}" y2="${H - 4}" stroke="var(--grid)"></line>
+      <text x="${x + 3}" y="${TOP - 10}" font-size="10" fill="var(--muted)">${d.getMonth() + 1}/${d.getDate()}</text>`);
+  }
+  const todayX = xOf(todayStr());
+  const marks = rows.map(([proj, list], i) => {
+    const y = TOP + i * ROW_H + ROW_H / 2;
+    const dots = list.map((t) => {
+      const due = dateStart(t["期日"]);
+      const over = due < todayStr();
+      const soon = !over && daysUntil(t["期日"]) <= 3;
+      const color = over ? "var(--status-critical)" : soon ? "var(--status-serious)" : "var(--series-1)";
+      return `<circle cx="${xOf(due)}" cy="${y}" r="6" fill="${color}" stroke="var(--surface)" stroke-width="2" class="tl-dot" data-id="${escapeHtml(t.id)}" data-tip="${escapeHtml(`${due} ${t["タスク名"]}${over ? "（期限超過）" : ""}`)}"></circle>`;
+    });
+    return `<text x="${LABEL - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--ink-2)">${escapeHtml(proj.length > 9 ? proj.slice(0, 8) + "…" : proj)}</text>
+      <line x1="${LABEL}" y1="${y}" x2="${W - 16}" y2="${y}" stroke="var(--grid)"></line>${dots.join("")}`;
+  });
+  container.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="タスクタイムライン">
+      ${ticks.join("")}
+      <line x1="${todayX}" y1="${TOP - 6}" x2="${todayX}" y2="${H - 4}" stroke="var(--status-critical)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+      <text x="${todayX + 3}" y="${H - 8}" font-size="10" fill="var(--status-critical)">今日</text>
+      ${marks.join("")}
+    </svg>
+    <div class="chart-legend">
+      <span class="key"><span class="swatch" style="background:var(--status-critical)"></span>期限超過</span>
+      <span class="key"><span class="swatch" style="background:var(--status-serious)"></span>3日以内</span>
+      <span class="key"><span class="swatch" style="background:var(--series-1)"></span>それ以降</span>
+      <span class="key" style="color:var(--muted)">●クリックで詳細</span>
+    </div>`;
+  bindTooltip(container.querySelector("svg"));
+  container.querySelectorAll(".tl-dot").forEach((dot) => {
+    dot.style.cursor = "pointer";
+    dot.addEventListener("click", () => {
+      const t = state.data.tasks.find((x) => x.id === dot.dataset.id);
+      if (t) openTaskDetail(t);
+    });
+  });
+}
+
+/* ---------------- パーソナルビュー（For me / For 西山副社長） ---------------- */
+
+function personEvents(owner, fromYmd, toYmd) {
+  return (state.data.calendar?.events || [])
+    .filter((e) => e.owner && e.owner.includes(owner))
+    .filter((e) => {
+      const s = e.start.slice(0, 10);
+      return s >= fromYmd && s <= toYmd;
+    })
+    .sort((a, b) => a.start.localeCompare(b.start));
+}
+
+function matchesKeywords(text, keywords) {
+  if (!text) return false;
+  return keywords.some((k) => String(text).includes(k));
+}
+
+function eventListHtml(events, emptyMsg) {
+  if (!events.length) return `<div class="empty-state">${escapeHtml(emptyMsg)}</div>`;
+  const byDay = new Map();
+  for (const e of events) {
+    const d = e.start.slice(0, 10);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(e);
+  }
+  return [...byDay.entries()]
+    .map(([day, evs]) => {
+      const d = new Date(day + "T00:00:00");
+      const w = ["日", "月", "火", "水", "木", "金", "土"][d.getDay()];
+      const isToday = day === todayStr();
+      return `<div class="pv-day ${isToday ? "pv-today" : ""}">
+        <div class="pv-day-head">${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}（${w}）${isToday ? "・今日" : ""}</div>
+        <ul class="day-list">${evs
+          .map(
+            (e) => `<li><span class="day-time">${e.allDay ? "終日" : e.start.slice(11, 16)}</span>${escapeHtml(e.title)}${e.location ? `<small class="day-loc">${escapeHtml(e.location)}</small>` : ""}</li>`
+          )
+          .join("")}</ul>
+      </div>`;
+    })
+    .join("");
+}
+
+function renderPersonTab(person) {
+  const panel = document.getElementById(`panel-${person.id}`);
+  const today = todayStr();
+  const weekEnd = localYmdOf(new Date(Date.now() + 7 * 86400000));
+
+  // 予定
+  const events = personEvents(person.owner, today, weekEnd);
+  panel.querySelector(".pv-schedule").innerHTML = eventListHtml(
+    events,
+    state.data.calendar?.events?.length
+      ? "直近7日間の予定はありません"
+      : "Outlook予定は未取り込みです（設定手順はREADME参照）"
+  );
+
+  // 関連タスク
+  const open = state.data.tasks.filter((t) => !isDone(t));
+  const related = person.keywords
+    ? open.filter(
+        (t) =>
+          matchesKeywords(t["タスク名"], person.keywords) ||
+          matchesKeywords(t["メモ"], person.keywords) ||
+          matchesKeywords(t.body, person.keywords) ||
+          matchesKeywords(projectNames(t), person.keywords)
+      )
+    : open;
+  renderTable(panel.querySelector(".pv-tasks"), sortTasks(related), TASK_COLUMNS, openTaskDetail);
+
+  // 関連案件・議事録（キーワード指定があるビューのみ）
+  const extra = panel.querySelector(".pv-extra");
+  if (person.keywords && extra) {
+    const matters = state.data.matters.filter(
+      (m) =>
+        matchesKeywords(m["案件名"], person.keywords) ||
+        matchesKeywords(m["メモ"], person.keywords) ||
+        matchesKeywords(m.body, person.keywords)
+    );
+    const meetings = sortMeetings(
+      state.data.meetings.filter(
+        (m) =>
+          matchesKeywords(m["会議名"], person.keywords) ||
+          matchesKeywords(peopleText(m["参加者"]), person.keywords) ||
+          matchesKeywords(m.body, person.keywords)
+      )
+    ).slice(0, 5);
+    extra.innerHTML = `
+      ${matters.length ? `<h2 style="margin-top:14px">関連する進行中案件</h2>` : ""}
+      <div class="pv-matters"></div>
+      ${meetings.length ? `<h2 style="margin-top:14px">関連する議事録（直近5件）</h2>` : ""}
+      <div class="pv-meetings"></div>`;
+    if (matters.length) {
+      renderTable(
+        extra.querySelector(".pv-matters"),
+        matters,
+        [
+          { label: "案件名", render: (m) => `<span class="row-title">${escapeHtml(m["案件名"])}</span>` },
+          { label: "ステータス", render: (m) => statusBadge(m["ステータス"]) },
+          { label: "メモ", render: (m) => escapeHtml(m["メモ"]) },
+        ],
+        openMatterDetail
+      );
+    }
+    if (meetings.length) {
+      renderTable(
+        extra.querySelector(".pv-meetings"),
+        meetings,
+        [
+          { label: "日時", cls: "num", render: (m) => escapeHtml(fmtDate(m["日時"])) },
+          { label: "会議名", render: (m) => `<span class="row-title">${escapeHtml(m["会議名"])}</span>` },
+          { label: "種別", render: (m) => (m["会議種別"] ? `<span class="badge">${escapeHtml(m["会議種別"])}</span>` : "") },
+        ],
+        openMeetingDetail
+      );
+    }
+  }
+}
+
+function renderPersonTabs() {
+  PERSONS.forEach(renderPersonTab);
+}
+
 /* ---------------- 概要タブ ---------------- */
 
 function renderOverview() {
@@ -639,10 +1301,33 @@ function renderOverview() {
     )
     .join("");
 
-  // 今週のフォーカス
-  document.getElementById("weekly-focus").innerHTML = renderMarkdown(
-    (meta.weeklyFocus || "").replace(/^## 📌 今週のフォーカス\n?/, "").replace(/^> ここに今週の重点事項を書く\n?/, "")
-  );
+  // 今週のフォーカス（タスクから自動生成。手書き分があれば下に併記）
+  const manual = (meta.weeklyFocus || "")
+    .replace(/^## 📌 今週のフォーカス\n?/, "")
+    .replace(/^> ここに今週の重点事項を書く\n?/, "")
+    .trim();
+  document.getElementById("weekly-focus").innerHTML =
+    renderMarkdown(meta.generatedFocus || manual) +
+    (meta.generatedFocus && manual
+      ? `<details class="focus-manual"><summary>Notionの手書きメモ</summary>${renderMarkdown(manual)}</details>`
+      : "");
+
+  // 今日の予定（Outlook予定があれば表示）
+  const todayItems = state.data.calendar?.events?.length ? itemsForDay(todayStr()) : [];
+  const todayCard = document.getElementById("today-card");
+  if (todayItems.length) {
+    todayCard.style.display = "";
+    document.getElementById("today-list").innerHTML = `<ul class="day-list">${todayItems
+      .map((it) => {
+        if (it.kind === "event")
+          return `<li><span class="day-time">${it.time || "終日"}</span><span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>${escapeHtml(it.title)}</li>`;
+        if (it.kind === "task") return `<li><span class="day-time">期日</span>✅ ${escapeHtml(it.title)}</li>`;
+        return `<li><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
+      })
+      .join("")}</ul>`;
+  } else {
+    todayCard.style.display = "none";
+  }
 
   // タスクステータス構成
   const stCount = {};
@@ -761,19 +1446,27 @@ async function main() {
     if (e.key === "Escape") closeDrawer();
   });
 
+  // 設定モーダル
+  document.getElementById("settings-btn").addEventListener("click", openSettings);
+
   const metaBar = document.querySelector(".meta-bar");
   try {
-    const [matters, tasks, projects, meetings, knowledge, meta] = await Promise.all([
-      loadJson("matters"),
-      loadJson("tasks"),
-      loadJson("projects"),
-      loadJson("meetings"),
-      loadJson("knowledge"),
-      loadJson("meta"),
-    ]);
-    state.data = { matters, tasks, projects, meetings, knowledge, meta };
+    const names = ["matters", "tasks", "projects", "meetings", "knowledge", "meta", "calendar"];
+    const raw = {};
+    await Promise.all(
+      names.map(async (n) => {
+        try {
+          raw[n] = await loadJson(n);
+        } catch (e) {
+          if (n === "calendar") raw[n] = { events: [] }; // 予定表は未生成でも動かす
+          else throw e;
+        }
+      })
+    );
+    state.data = await resolveData(raw);
+    const meta = state.data.meta;
     const synced = new Date(meta.syncedAt);
-    metaBar.innerHTML = `最終同期: ${synced.toLocaleString("ja-JP")}（3時間ごと自動）｜ ${meta.dashboardUrl ? `<a href="${escapeHtml(meta.dashboardUrl)}" target="_blank" rel="noopener">Notionで開く ↗</a>` : ""}`;
+    metaBar.innerHTML = `最終同期: ${synced.toLocaleString("ja-JP")}（3時間ごと自動）｜ ${meta.dashboardUrl ? `<a href="${escapeHtml(meta.dashboardUrl)}" target="_blank" rel="noopener">Notion ↗</a>` : ""}`;
   } catch (e) {
     console.error(e);
     metaBar.textContent = "同期データの読み込みに失敗しました。GitHub Actionsの実行状況を確認してください。";
@@ -781,13 +1474,34 @@ async function main() {
     return;
   }
 
-  renderOverview();
-  renderMattersTab();
-  renderTasksTab();
-  renderProjectsTab();
-  renderMeetingsTab();
+  rerenderAll();
   renderKnowledgeTab();
   activateTab(location.hash.slice(1) || "overview");
+}
+
+/* ---------------- 設定モーダル ---------------- */
+
+function openSettings() {
+  const overlay = document.getElementById("settings-overlay");
+  overlay.classList.add("open");
+  const passInput = document.getElementById("setting-pass");
+  const gasInput = document.getElementById("setting-gas");
+  passInput.value = getPass();
+  gasInput.value = localStorage.getItem("dash_gas_url") || "";
+  gasInput.placeholder = state.data?.meta?.editEndpoint
+    ? `既定: ${state.data.meta.editEndpoint.slice(0, 48)}…`
+    : "https://script.google.com/macros/s/…/exec";
+  const close = () => overlay.classList.remove("open");
+  document.getElementById("settings-cancel").onclick = close;
+  document.getElementById("settings-save").onclick = () => {
+    if (passInput.value) localStorage.setItem("dash_pass", passInput.value);
+    else localStorage.removeItem("dash_pass");
+    if (gasInput.value) localStorage.setItem("dash_gas_url", gasInput.value.trim());
+    else localStorage.removeItem("dash_gas_url");
+    close();
+    toast("設定を保存しました");
+    location.reload();
+  };
 }
 
 main();

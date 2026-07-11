@@ -1,55 +1,72 @@
 # 板橋 ダッシュボード
 
-Notionで管理している「板橋 ダッシュボード」の基幹部分（進行中案件・TODO・プロジェクト管理・議事録・ナレッジベース）を、**読み取り専用**のダッシュボードとして1ページで俯瞰できる静的サイトです。
+Notionをデータベースとして使いつつ、閲覧・編集を1つのWebページで完結させるダッシュボード。
+https://andcokey.github.io/my_dashboard/index.html
 
-- `index.html` のタブ型SPA。概要タブにKPIタイル・タスクステータス構成・会議アクティビティ・プロジェクト別タスクのチャートを表示し、各タブで一覧＋クリックで詳細ドロワー（Notionページ本文込み）を閲覧できる
-- 各ページの**本文もNotionから同期**するため、通常の閲覧はサイト内で完結する（編集のみNotion側）
-- GitHub Actionsが3時間ごと・mainへのpush時・手動実行でNotion APIからデータを取得し、GitHub Pagesへ配信
-- Slackメンション/メール案件/政治家・重要人物ニュース追跡/ストック週次分析などは対象外（Notion側にそのまま残る）
+## できること
+
+- **タブ**: 概要 / For me / For 西山副社長 / 予定表 / 進行中案件 / TODO / プロジェクト / 議事録 / ナレッジ
+- **概要**: KPIタイル・今週のフォーカス（タスクから自動生成）・今日の予定・各種チャート
+- **For me / For 西山副社長**: 本人のOutlook予定（直近7日）＋関連タスク・案件・議事録
+- **予定表**: 月カレンダー（Outlook予定・タスク期日・議事録を重ね表示）＋タスクタイムライン
+- **編集**: タスク・案件・プロジェクトのステータス／優先度／期日／メモを詳細画面から直接変更、新規タスク作成 → GAS経由でNotionに即時反映
+- **保護**: データはAES-256-GCMで暗号化して配信。閲覧には合言葉が必要（初回入力後ブラウザが記憶）
 
 ## 構成
 
 ```
-sync/fetch-notion.js   Notion APIから5データソース＋各ページ本文を取得しweb/data/*.jsonを生成するスクリプト
-web/index.html          タブ型SPA本体（matters.html等の旧ページはindex.htmlへのリダイレクト）
-web/assets/app.js       KPI・チャート・一覧・詳細ドロワーの描画ロジック
-.github/workflows/deploy.yml  push時＋定期実行＋手動実行でPagesデプロイ
+sync/fetch-notion.js        Notion→JSON同期（本文込み）、フォーカス自動生成、予定表統合、暗号化
+sync/crypto.js              暗号化ユーティリティ（Web側と同フォーマット）
+sync/ics.js                 Outlook公開ICSのパーサ（自動同期用・任意）
+sync/encrypt-snapshot.js    Claude(MCP)が取得した予定表スナップショットの暗号化
+sync/calendar-snapshot.enc.json  暗号化済み予定表スナップショット（コミット対象）
+gas/Code.gs                 編集プロキシ（Google Apps Script、Notionへの書き込み担当）
+web/                        タブ型SPA本体
+.github/workflows/deploy.yml  push時＋3時間ごと＋手動でPagesへデプロイ
 ```
 
-## セットアップ手順
+## セットアップ（初回のみ）
 
-### 1. Notion Integrationを作成
+### 1. サイトの合言葉
 
-1. https://www.notion.so/my-integrations で新規Internal Integrationを作成し、Tokenをコピー
-2. 対象の5つのデータソース（📁 進行中案件 / ✅ TODO / プロジェクト管理 / 議事録 / 📚 ナレッジベース）それぞれで「•••」→「Connections」から作成したIntegrationを接続（Connect）
+1. リポジトリの Settings > Secrets and variables > Actions > **Secrets** に `SITE_PASSWORD` を登録
+2. 同じ文字列をサイト閲覧時の合言葉として使う（初回アクセス時に入力）
 
-### 2. GitHubリポジトリの準備
+### 2. 編集プロキシ（GAS）
 
-1. このディレクトリをprivateリポジトリとしてGitHubにpush
-2. リポジトリの Settings > Secrets and variables > Actions で `NOTION_TOKEN` を登録（手順1で取得したトークン）
-3. Settings > Pages で Source を **GitHub Actions** に設定
-4. private repoでPagesを公開するには GitHub Pro（個人）または Team/Enterprise（Organization）が必要。プランを確認のうえ、必要なら変更する
+1. https://script.google.com で新規プロジェクト作成、`gas/Code.gs` の中身を貼り付け
+2. プロジェクトの設定 > スクリプト プロパティに以下を追加
+   - `NOTION_TOKEN`: GitHub Secretsに登録済みのNotionトークンと同じもの
+   - `SHARED_TOKEN`: `SITE_PASSWORD` と同じ文字列
+3. デプロイ > 新しいデプロイ > ウェブアプリ（実行ユーザー: 自分／アクセス: 全員）
+4. 発行されたURL（`https://script.google.com/macros/s/…/exec`）を
+   Settings > Secrets and variables > Actions > **Variables** に `GAS_ENDPOINT` として登録
+   （またはサイトの⚙設定に直接貼り付け）
 
-### 3. 動作確認（ローカル）
+### 3. Outlook予定表
 
-```bash
-npm install
-NOTION_TOKEN=xxxxx npm run sync   # web/data/*.json が生成される
-npx serve web                      # または python -m http.server 8080 --directory web
+方法A（Claude/MCP・推奨）: Claude Codeに「予定表を更新して」と頼む。
+Claudeが Microsoft 365 MCP で自分と西山副社長の予定を取得し、暗号化スナップショットとしてコミットする。
+
+方法B（ICS・全自動）: Outlook on the web > 設定 > 予定表 > 共有予定表 > 「予定表の公開」でICS URLを発行し、
+Secrets に `CALENDAR_ICS` を登録:
+```json
+[{"name":"板橋","url":"https://outlook.office365.com/owa/calendar/..../calendar.ics"}]
 ```
 
-生成された `web/data/*.json` の中身と、実際のNotionの内容を見比べて問題ないか確認してください。
+## 予定表の更新（方法A）の内部フロー
 
-### 4. デプロイ
-
-`main` にpushするか、Actionsタブから `Sync Notion & Deploy Pages` を手動実行（workflow_dispatch）すると、Notionから最新データを取得してPagesへデプロイされます。以降は3時間ごとに自動実行されます。
+1. Claude が MCP で Outlook イベントを取得し、平文JSONを一時ディレクトリに書く
+2. `SITE_PASSWORD=xxx node sync/encrypt-snapshot.js <events.json>` で `sync/calendar-snapshot.enc.json` を生成
+3. コミット＆push → Actions が復号・マージして `web/data/calendar.json`（暗号化）として配信
 
 ## Notion側の構成が変わったとき
 
-`sync/fetch-notion.js` 冒頭の `SOURCES` / `KNOWLEDGE_PAGE_ID` / `DASHBOARD_ROOT_PAGE_ID` にデータソースIDを直書きしています。Notion側でデータベースを作り直した場合はここを更新してください。プロパティ名（日本語のカラム名）が変わった場合は、同ファイル内の該当箇所と `web/*.html` 側のカラム参照も合わせて修正が必要です。
+`sync/fetch-notion.js` 冒頭の `SOURCES` / `KNOWLEDGE_PAGE_ID` / `DASHBOARD_ROOT_PAGE_ID` を更新。
+プロパティ名（日本語カラム名）が変わった場合は `web/assets/app.js` 側の参照も合わせて修正する。
 
-## 対象外にしているデータ（Notionに残るもの）
+## セキュリティメモ
 
-Slackメンション / メール案件 / 政治家・重要人物ニュース追跡 / 朝のニュースブリーフィング / 政界ブリーフィング / ストック週次分析 / Summit Half コンパス
-
-これらはSlack Bot・メール取込・AI自動レポート生成という別レイヤーの自動化に依存しており、機密性も高いため今回のビューアには含めていません。必要になったら追加のデータソースとして同じ方式で拡張できます。
+- リポジトリは公開だが、業務データ（`web/data/*.json`・予定表スナップショット）はすべて `SITE_PASSWORD` で暗号化されている
+- GASのURLが知られても `SHARED_TOKEN`（合言葉）がなければ書き込みできない
+- 合言葉を変える場合: GitHub Secrets / GASのSHARED_TOKEN / 閲覧者のブラウザ（⚙設定）の3か所を更新
