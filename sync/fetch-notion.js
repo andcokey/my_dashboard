@@ -19,7 +19,7 @@ const notion = new Client({ auth: NOTION_TOKEN });
 // 対象データソース（Notion側で名称・IDが変わった場合はここを更新する）
 const SOURCES = {
   matters: "142608b7-14a5-44eb-9c73-d936c8ee6c69", // 📁 進行中案件
-  tasks: "39b5bc43-8f77-4ef4-8ae9-f196cd455d4c", // ✅ TODO
+  tasks: "39b5bc43-8f77-4ef4-8ae5-f196cd455d4c", // ✅ TODO
   projects: "d8f104c2-3dac-4122-acb4-1290aa353942", // プロジェクト管理
   meetings: "c7b42ace-626f-4ffd-ac88-1576c14a87a0", // 議事録
 };
