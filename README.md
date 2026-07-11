@@ -9,7 +9,8 @@ https://andcokey.github.io/my_dashboard/index.html
 - **概要**: KPIタイル・今週のフォーカス（タスクから自動生成）・今日の予定・各種チャート
 - **For me / For 西山副社長**: 本人のOutlook予定（直近7日）＋関連タスク・案件・議事録
 - **予定表**: 月カレンダー（Outlook予定・タスク期日・議事録を重ね表示）＋タスクタイムライン
-- **編集**: タスク・案件・プロジェクトのステータス／優先度／期日／メモを詳細画面から直接変更、新規タスク作成 → GAS経由でNotionに即時反映
+- **編集**: タスク・案件・プロジェクトのステータス／優先度／期日／メモを詳細画面から直接変更、新規タスク作成、削除（Notionのゴミ箱へ移動） → GAS経由でNotionに即時反映
+- **工数**: 自分のOutlook予定を案件別に分類し、今週の会議時間（概要）と直近4週の週別スタック（予定表）を表示
 - **保護**: データはAES-256-GCMで暗号化して配信。閲覧には合言葉が必要（初回入力後ブラウザが記憶）
 
 ## 構成
@@ -45,8 +46,11 @@ web/                        タブ型SPA本体
 
 ### 3. Outlook予定表
 
-方法A（Claude/MCP・推奨）: Claude Codeに「予定表を更新して」と頼む。
-Claudeが Microsoft 365 MCP で自分と西山副社長の予定を取得し、暗号化スナップショットとしてコミットする。
+方法A（Claude/MCP・推奨）: 毎朝07:48にWindowsタスクスケジューラ「DashboardCalendarUpdate」が
+`%USERPROFILE%\.claude\scripts\update-dashboard-calendar.ps1` を実行し、Claude Codeヘッドレスが
+Outlook予定を取得→暗号化→push する（PCが起動していなければ次回起動時に実行）。
+手動更新はClaude Codeに「予定表を更新して」と頼めばよい。
+ログ: `%USERPROFILE%\.claude\logs\dashboard-calendar.log`
 
 方法B（ICS・全自動）: Outlook on the web > 設定 > 予定表 > 共有予定表 > 「予定表の公開」でICS URLを発行し、
 Secrets に `CALENDAR_ICS` を登録:
