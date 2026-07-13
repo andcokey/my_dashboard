@@ -1541,6 +1541,31 @@ function renderReplyTab() {
       : "Slack監視はまだ設定されていません。";
   }
 
+  // TODO化した項目一覧（クリックでタスク詳細を開く。ローカルにタスクが見つからなければNotionを別タブで開く）
+  const todosList = document.getElementById("reply-slack-todos");
+  if (todosList) {
+    const created = [...(slack.todosCreated || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    todosList.innerHTML = !created.length
+      ? `<div class="empty-state">TODO化した項目はまだありません</div>`
+      : `<ul class="day-list">${created
+          .map(
+            (c, i) => `<li class="day-click" data-i="${i}">
+              <span class="day-time">${escapeHtml((c.createdAt || "").slice(0, 16).replace("T", " "))}</span>
+              <span>${escapeHtml((c.text || "").slice(0, 70))}</span>
+            </li>`
+          )
+          .join("")}</ul>`;
+    todosList.querySelectorAll(".day-click").forEach((li) => {
+      li.addEventListener("click", () => {
+        const c = created[Number(li.dataset.i)];
+        const t = c.taskId ? state.data.tasks.find((x) => x.id === c.taskId) : null;
+        if (t) openTaskDetail(t);
+        else if (c.notionUrl) window.open(c.notionUrl, "_blank", "noopener");
+        else toast("開き先の情報がありません", true);
+      });
+    });
+  }
+
   // Outlookメール監視
   const mailItems = [...(mail.items || [])].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
   const mailUnreplied = mailItems.filter((m) => m.isUnreplied);
