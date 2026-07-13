@@ -227,9 +227,10 @@ function generateWeeklyFocus(tasks) {
   });
   if (!relevant.length) return "- 今週：期日が今週のタスクはありません。仕込みと整理に充てる。";
 
+  // 優先度は数値が大きいほど優先度が高い（3＞2＞1）。優先度未設定は最低扱い
   const priNum = (p) => {
     const n = parseInt(p, 10);
-    return Number.isNaN(n) ? 9 : n;
+    return Number.isNaN(n) ? -1 : n;
   };
   const groups = new Map();
   for (const t of relevant) {
@@ -245,7 +246,7 @@ function generateWeeklyFocus(tasks) {
   for (const [proj, list] of sorted) {
     list.sort(
       (a, b) =>
-        priNum(a["優先度"]) - priNum(b["優先度"]) ||
+        priNum(b["優先度"]) - priNum(a["優先度"]) ||
         a["期日"].start.localeCompare(b["期日"].start)
     );
     const top = list[0];

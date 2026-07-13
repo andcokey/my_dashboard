@@ -184,6 +184,22 @@ main {
 }
 .kpi .kpi-sub { font-size: 11px; color: var(--muted); }
 .kpi.kpi-critical .kpi-value { color: var(--status-critical); }
+.kpi.kpi-click { cursor: pointer; transition: outline-color 0.15s; }
+.kpi.kpi-click:hover { border-color: var(--accent); }
+.kpi.kpi-click.active { outline: 2px solid var(--accent); outline-offset: -2px; }
+#kpi-detail {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease;
+}
+#kpi-detail.open { grid-template-rows: 1fr; margin-bottom: 16px; }
+#kpi-detail > div { overflow: hidden; min-height: 0; }
+.kpi-detail-inner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
 
 /* ---------- バッジ ---------- */
 .badge {
@@ -550,7 +566,20 @@ footer {
   flex-wrap: wrap;
   margin-bottom: 10px;
 }
-.cal-nav { display: flex; gap: 6px; }
+.cal-nav { display: flex; gap: 6px; align-items: center; }
+.cal-view-toggle { display: flex; gap: 4px; margin-right: 4px; }
+.cal-view-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cal-search {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 220px;
+  margin-left: auto;
+}
 .cal-filters {
   display: flex;
   gap: 14px;
@@ -608,6 +637,36 @@ footer {
 .chip-task.chip-over { border-left-color: var(--status-critical); color: var(--status-critical); }
 .chip-meeting { border-left-color: var(--gray-mark); }
 .cal-more { font-size: 10px; color: var(--accent); margin-top: 2px; }
+
+/* 週次表示 */
+.cal-grid.cal-grid--week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border: none;
+}
+.cal-week-day {
+  border-right: 1px solid var(--grid);
+  border-bottom: 1px solid var(--grid);
+  padding: 6px 6px 10px;
+  min-height: 120px;
+}
+.cal-week-day.cal-today { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cal-week-day-head {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.cal-week-day.cal-today .cal-week-day-head { color: var(--accent); }
+.cal-week-day .day-list li { padding: 4px 2px; }
+.cal-week-day .day-row { flex-wrap: wrap; }
+
+/* 検索結果表示 */
+.cal-grid.cal-grid--search {
+  display: block;
+  border: none;
+  padding: 4px 0;
+}
 
 .day-list { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
 .day-list li {
@@ -671,6 +730,43 @@ footer {
 .day-loc-full { margin-bottom: 6px; max-width: none; }
 .day-body-text { white-space: pre-wrap; margin-bottom: 8px; }
 .day-expand-inner .btn { display: inline-block; }
+.day-zoom-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.zoom-add-form { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.zoom-add-form input {
+  flex: 1;
+  min-width: 180px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--baseline);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+/* 会議開始通知バナー */
+.meeting-banner {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(11, 11, 11, 0.25);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 500;
+  font-size: 13px;
+  animation: meeting-banner-in 0.25s ease-out;
+}
+.meeting-banner-close { margin-left: auto; flex: none; }
+@keyframes meeting-banner-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
 
 .focus-manual { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
 .focus-manual summary { cursor: pointer; color: var(--muted); }

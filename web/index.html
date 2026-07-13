@@ -24,6 +24,7 @@
   <!-- 概要 -->
   <section id="panel-overview" class="tab-panel">
     <div id="kpi-row" class="kpi-row"></div>
+    <div id="kpi-detail" class="kpi-detail"></div>
 
     <div class="card focus-card">
       <h2>📌 今週のフォーカス<small>タスクから自動生成</small></h2>
@@ -107,12 +108,19 @@
       <div class="cal-head">
         <h2 id="cal-title" style="margin:0"></h2>
         <div class="cal-nav">
-          <button class="btn" id="cal-prev">‹ 前月</button>
-          <button class="btn" id="cal-today-btn">今月</button>
-          <button class="btn" id="cal-next">次月 ›</button>
+          <div class="cal-view-toggle">
+            <button class="btn cal-view-btn" data-view="month">月</button>
+            <button class="btn cal-view-btn" data-view="week">週</button>
+          </div>
+          <button class="btn" id="cal-prev">‹ 前</button>
+          <button class="btn" id="cal-today-btn">今日</button>
+          <button class="btn" id="cal-next">次 ›</button>
         </div>
       </div>
-      <div id="cal-filters" class="cal-filters"></div>
+      <div class="cal-head">
+        <div id="cal-filters" class="cal-filters"></div>
+        <input type="search" id="cal-search" class="cal-search" placeholder="🔍 予定を検索…（件名・場所・本文）">
+      </div>
       <div id="cal-grid" class="cal-grid"></div>
       <p id="cal-note" class="section-note"></p>
     </div>

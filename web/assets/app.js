@@ -216,10 +216,11 @@ function priNumber(pri) {
   return Number.isNaN(n) ? null : n;
 }
 
+// 優先度は数値が大きいほど優先度が高い（3＞2＞1）
 function priBadge(pri) {
   const n = priNumber(pri);
   if (n === null) return "";
-  const cls = n <= 1 ? "pri-1" : n === 2 ? "pri-2" : "pri-3";
+  const cls = n >= 3 ? "pri-1" : n === 2 ? "pri-2" : "pri-3";
   return `<span class="badge ${cls}">P${n}</span>`;
 }
 
@@ -848,7 +849,8 @@ function sortTasks(tasks) {
     if (da && db) return isDone(a) ? db.localeCompare(da) : da.localeCompare(db);
     if (da) return -1;
     if (db) return 1;
-    return (priNumber(a["優先度"]) ?? 9) - (priNumber(b["優先度"]) ?? 9);
+    // 優先度は数値が大きいほど優先度が高い（3＞2＞1）ので降順、未設定は最後
+    return (priNumber(b["優先度"]) ?? -1) - (priNumber(a["優先度"]) ?? -1);
   });
 }
 
@@ -1043,22 +1045,55 @@ function renderCalendarTab() {
   const owners = calOwners();
   ensureCalFilters();
   if (!state.calMonth) state.calMonth = todayStr().slice(0, 7);
+  if (!state.calWeekStart) state.calWeekStart = mondayOf(todayStr());
+  if (!state.calView) state.calView = "month";
 
-  // 月送り
+  // 月送り・週送り（表示モードに応じて切り替え）
   const prevBtn = document.getElementById("cal-prev");
   if (!prevBtn.dataset.bound) {
     prevBtn.dataset.bound = "1";
     const shift = (n) => {
-      const [y, m] = state.calMonth.split("-").map(Number);
-      const d = new Date(y, m - 1 + n, 1);
-      state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      renderCalendarGrid();
+      if (state.calView === "week") {
+        const d = new Date(state.calWeekStart + "T00:00:00");
+        d.setDate(d.getDate() + 7 * n);
+        state.calWeekStart = localYmdOf(d);
+      } else {
+        const [y, m] = state.calMonth.split("-").map(Number);
+        const d = new Date(y, m - 1 + n, 1);
+        state.calMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      }
+      renderCalendarBody();
     };
     prevBtn.addEventListener("click", () => shift(-1));
     document.getElementById("cal-next").addEventListener("click", () => shift(1));
     document.getElementById("cal-today-btn").addEventListener("click", () => {
       state.calMonth = todayStr().slice(0, 7);
-      renderCalendarGrid();
+      state.calWeekStart = mondayOf(todayStr());
+      renderCalendarBody();
+    });
+  }
+
+  // 月次／週次 表示切替
+  document.querySelectorAll(".cal-view-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.view === state.calView);
+    if (!btn.dataset.bound) {
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        state.calView = btn.dataset.view;
+        document.querySelectorAll(".cal-view-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        renderCalendarBody();
+      });
+    }
+  });
+
+  // 検索
+  const searchInput = document.getElementById("cal-search");
+  if (searchInput && !searchInput.dataset.bound) {
+    searchInput.dataset.bound = "1";
+    searchInput.value = state.calSearch || "";
+    searchInput.addEventListener("input", () => {
+      state.calSearch = searchInput.value;
+      renderCalendarBody();
     });
   }
 
@@ -1077,7 +1112,7 @@ function renderCalendarTab() {
   filterEl.querySelectorAll("input").forEach((cb) => {
     cb.addEventListener("change", () => {
       cb.checked ? state.calFilters.add(cb.dataset.key) : state.calFilters.delete(cb.dataset.key);
-      renderCalendarGrid();
+      renderCalendarBody();
     });
   });
 
@@ -1088,8 +1123,15 @@ function renderCalendarTab() {
     note.textContent = `Outlook予定 ${cal.events.length}件（取得: ${new Date(cal.updatedAt).toLocaleString("ja-JP")}）`;
   }
 
-  renderCalendarGrid();
+  renderCalendarBody();
   renderTimeline();
+}
+
+function renderCalendarBody() {
+  const q = (state.calSearch || "").trim();
+  if (q) return renderCalendarSearch(q);
+  if (state.calView === "week") return renderCalendarWeek();
+  return renderCalendarGrid();
 }
 
 function renderCalendarGrid() {
@@ -1108,7 +1150,7 @@ function renderCalendarGrid() {
     const items = itemsForDay(ymd);
     const chips = items.slice(0, 4).map((it) => {
       if (it.kind === "event") {
-        return `<div class="cal-chip" style="--chip:${ownerColor(it.ev.owner)}" data-day="${ymd}">${it.time ? `<span class="chip-time">${it.time}</span>` : ""}${escapeHtml(it.title)}</div>`;
+        return `<div class="cal-chip" style="--chip:${ownerColor(it.ev.owner)}" data-day="${ymd}">${it.time ? `<span class="chip-time">${it.time}</span>` : ""}${escapeHtml(it.title)}${effectiveJoinUrl(it.ev) ? " 🔵" : ""}</div>`;
       }
       if (it.kind === "task") {
         const over = ymd < today;
@@ -1123,12 +1165,231 @@ function renderCalendarGrid() {
     </div>`);
   }
   const grid = document.getElementById("cal-grid");
+  grid.classList.remove("cal-grid--week", "cal-grid--search");
   grid.innerHTML =
     ["月", "火", "水", "木", "金", "土", "日"].map((w) => `<div class="cal-dow">${w}</div>`).join("") +
     cells.join("");
   grid.querySelectorAll(".cal-cell").forEach((cell) => {
     cell.addEventListener("click", () => openDayDetail(cell.dataset.day));
   });
+}
+
+function weekRangeLabel(startYmd) {
+  const start = new Date(startYmd + "T00:00:00");
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  return `${start.getFullYear()}年${start.getMonth() + 1}/${start.getDate()} 〜 ${end.getMonth() + 1}/${end.getDate()}`;
+}
+
+// 週次表示: 曜日ごとに列を作り、その日の予定・タスク期日・議事録を全件（省略なし）インライン表示する
+function renderCalendarWeek() {
+  document.getElementById("cal-title").textContent = weekRangeLabel(state.calWeekStart);
+  const today = todayStr();
+  const dowLabels = ["月", "火", "水", "木", "金", "土", "日"];
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(state.calWeekStart + "T00:00:00");
+    d.setDate(d.getDate() + i);
+    days.push({ ymd: localYmdOf(d), d, dow: dowLabels[i] });
+  }
+  const grid = document.getElementById("cal-grid");
+  grid.classList.remove("cal-grid--search");
+  grid.classList.add("cal-grid--week");
+  grid.innerHTML = days
+    .map(({ ymd, d, dow }) => {
+      const items = itemsForDay(ymd);
+      const body = items.length
+        ? `<ul class="day-list">${items
+            .map((it) => {
+              if (it.kind === "event") return eventItemHtml(it.ev, it.time || "終日");
+              if (it.kind === "task")
+                return `<li class="day-click" data-task-id="${escapeHtml(it.t.id)}"><span class="day-time">期日</span>✅ ${escapeHtml(it.title)}</li>`;
+              return `<li class="day-click" data-meeting-id="${escapeHtml(it.m.id)}"><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
+            })
+            .join("")}</ul>`
+        : `<div class="empty-state" style="padding:14px 4px">予定はありません</div>`;
+      return `<div class="cal-week-day ${ymd === today ? "cal-today" : ""}">
+        <div class="cal-week-day-head">${dow} ${d.getMonth() + 1}/${d.getDate()}</div>
+        ${body}
+      </div>`;
+    })
+    .join("");
+  grid.querySelectorAll(".day-click").forEach((li) => {
+    li.addEventListener("click", () => {
+      if (li.dataset.taskId) {
+        const t = state.data.tasks.find((x) => x.id === li.dataset.taskId);
+        if (t) openTaskDetail(t);
+      } else if (li.dataset.meetingId) {
+        const m = state.data.meetings.find((x) => x.id === li.dataset.meetingId);
+        if (m) openMeetingDetail(m);
+      }
+    });
+  });
+  bindEventAccordions(grid);
+}
+
+// 検索結果表示: 予定表全期間のイベントをタイトル・場所・本文でキーワード検索する
+function renderCalendarSearch(q) {
+  const query = q.toLowerCase();
+  const events = (state.data.calendar?.events || [])
+    .filter((ev) => [ev.title, ev.location, ev.body].some((f) => f && f.toLowerCase().includes(query)))
+    .sort((a, b) => a.start.localeCompare(b.start));
+  document.getElementById("cal-title").textContent = `🔍「${q}」の検索結果（${events.length}件）`;
+  const grid = document.getElementById("cal-grid");
+  grid.classList.remove("cal-grid--week");
+  grid.classList.add("cal-grid--search");
+  if (!events.length) {
+    grid.innerHTML = `<div class="empty-state">該当する予定は見つかりませんでした</div>`;
+    return;
+  }
+  grid.innerHTML = `<ul class="day-list">${events
+    .map((ev) => eventItemHtml(ev, `${ev.start.slice(0, 10)}${ev.allDay ? "" : " " + ev.start.slice(11, 16)}`))
+    .join("")}</ul>`;
+  bindEventAccordions(grid);
+}
+
+// ---- Zoom等参加リンクの手動上書き（ブラウザのlocalStorageに保存。予定表は自動同期で作り直されるため） ----
+function zoomOverrideKey(ev) {
+  return `${ev.title}|${ev.start}`;
+}
+function getZoomOverrides() {
+  try {
+    return JSON.parse(localStorage.getItem("dash_zoom_overrides") || "{}");
+  } catch {
+    return {};
+  }
+}
+function setZoomOverrideByKey(key, url) {
+  const map = getZoomOverrides();
+  if (url) map[key] = url;
+  else delete map[key];
+  localStorage.setItem("dash_zoom_overrides", JSON.stringify(map));
+}
+function effectiveJoinUrl(ev) {
+  return ev.joinUrl || getZoomOverrides()[zoomOverrideKey(ev)] || null;
+}
+
+// 予定1件分のインライン展開アイテム（日ドロワー・For me・For西山副社長で共通利用）
+function eventItemHtml(ev, timeLabel) {
+  const joinUrl = effectiveJoinUrl(ev);
+  const isManual = !ev.joinUrl && joinUrl;
+  const key = escapeHtml(zoomOverrideKey(ev));
+  const head = `<div class="day-row">
+    <span class="day-time">${escapeHtml(timeLabel)}</span>
+    <span class="swatch" style="background:${ownerColor(ev.owner)}"></span>
+    <span class="day-row-title">${escapeHtml(ev.title)}</span>
+    ${ev.location ? `<small class="day-loc">${escapeHtml(ev.location)}</small>` : ""}
+    <span class="day-expand-caret">▾</span>
+  </div>`;
+  const zoomRow = joinUrl
+    ? `<a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(joinUrl)}">🔵 参加する</a>${
+        isManual ? `<button type="button" class="btn zoom-edit-btn">✎ リンクを変更</button>` : ""
+      }`
+    : `<form class="zoom-add-form">
+        <input type="url" placeholder="Zoom/TeamsのURLを貼り付け" required>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </form>`;
+  const detail = `<div class="day-expand"><div><div class="day-expand-inner">
+    ${ev.location ? `<div class="day-loc-full">📍 ${escapeHtml(ev.location)}</div>` : ""}
+    ${ev.body ? `<div class="day-body-text">${escapeHtml(ev.body)}</div>` : ""}
+    <div class="day-zoom-row">${zoomRow}</div>
+  </div></div></div>`;
+  return `<li class="day-event" data-zoom-key="${key}">${head}${detail}</li>`;
+}
+
+// 参加リンク行をその場で差し替える（保存後もアコーディオンを開いたまま・全体再描画しない）
+function renderZoomRow(li, joinUrl, isManual) {
+  const zoomRow = li.querySelector(".day-zoom-row");
+  if (!zoomRow) return;
+  zoomRow.innerHTML = joinUrl
+    ? `<a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(joinUrl)}">🔵 参加する</a>${
+        isManual ? `<button type="button" class="btn zoom-edit-btn">✎ リンクを変更</button>` : ""
+      }`
+    : `<form class="zoom-add-form">
+        <input type="url" placeholder="Zoom/TeamsのURLを貼り付け" required>
+        <button type="submit" class="btn btn-primary">保存</button>
+      </form>`;
+  const editBtn = zoomRow.querySelector(".zoom-edit-btn");
+  if (editBtn) {
+    editBtn.addEventListener("click", () => {
+      setZoomOverrideByKey(li.dataset.zoomKey, null);
+      renderZoomRow(li, null, false);
+    });
+  }
+  const form = zoomRow.querySelector(".zoom-add-form");
+  if (form) bindZoomForm(form, li);
+}
+function bindZoomForm(form, li) {
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const url = form.querySelector("input").value.trim();
+    if (!url) return;
+    setZoomOverrideByKey(li.dataset.zoomKey, url);
+    renderZoomRow(li, url, true);
+    toast("Zoomリンクを保存しました（このブラウザに保存）");
+  });
+}
+
+// eventItemHtmlで作ったliの開閉・Zoomリンク保存フォームを配線する
+function bindEventAccordions(container) {
+  container.querySelectorAll(".day-event").forEach((li) => {
+    li.querySelector(".day-row").addEventListener("click", () => li.classList.toggle("open"));
+    const editBtn = li.querySelector(".zoom-edit-btn");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        setZoomOverrideByKey(li.dataset.zoomKey, null);
+        renderZoomRow(li, null, false);
+      });
+    }
+    const form = li.querySelector(".zoom-add-form");
+    if (form) bindZoomForm(form, li);
+  });
+}
+
+// ---- 会議開始時刻の自動通知（自分の予定・Zoomリンクがある会議のみ） ----
+// ブラウザの制約上、クリック無しで自動的にZoomへ遷移させることはできない（ポップアップブロック対象になる）。
+// 代わりに開始時刻になったら通知バナー＋Notification APIで知らせ、ワンクリックで参加できるようにする。
+const notifiedMeetings = new Set();
+function checkUpcomingMeetings() {
+  const events = state.data?.calendar?.events || [];
+  const now = Date.now();
+  for (const ev of events) {
+    if (ev.owner !== "板橋" || ev.allDay) continue;
+    const joinUrl = effectiveJoinUrl(ev);
+    if (!joinUrl) continue;
+    const key = zoomOverrideKey(ev);
+    if (notifiedMeetings.has(key)) continue;
+    const startMs = new Date(ev.start).getTime();
+    if (Number.isNaN(startMs)) continue;
+    if (now >= startMs && now - startMs < 10 * 60000) {
+      notifiedMeetings.add(key);
+      notifyMeetingStart(ev, joinUrl);
+    }
+  }
+}
+function notifyMeetingStart(ev, joinUrl) {
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    try {
+      const n = new Notification(`🟢 ${ev.title} が始まりました`, { body: "クリックでZoomに参加できます" });
+      n.onclick = () => {
+        window.open(joinUrl, "_blank");
+        n.close();
+      };
+    } catch {
+      // 通知に失敗してもバナー表示は続行
+    }
+  }
+  showMeetingBanner(ev, joinUrl);
+}
+function showMeetingBanner(ev, joinUrl) {
+  const bar = document.createElement("div");
+  bar.className = "meeting-banner";
+  bar.innerHTML = `
+    <span>🟢 <strong>${escapeHtml(ev.title)}</strong> が始まりました</span>
+    <a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(joinUrl)}">参加する</a>
+    <button type="button" class="icon-btn meeting-banner-close" aria-label="閉じる">×</button>`;
+  bar.querySelector(".meeting-banner-close").addEventListener("click", () => bar.remove());
+  document.body.appendChild(bar);
 }
 
 function openDayDetail(ymd) {
@@ -1139,24 +1400,7 @@ function openDayDetail(ymd) {
   document.getElementById("drawer-content").innerHTML = items.length
     ? `<ul class="day-list">${items
         .map((it, i) => {
-          if (it.kind === "event") {
-            const hasDetail = it.ev.body || it.ev.joinUrl || it.ev.location;
-            const head = `<div class="day-row">
-              <span class="day-time">${it.time || "終日"}</span>
-              <span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>
-              <span class="day-row-title">${escapeHtml(it.title)}</span>
-              ${it.ev.location ? `<small class="day-loc">${escapeHtml(it.ev.location)}</small>` : ""}
-              ${hasDetail ? `<span class="day-expand-caret">▾</span>` : ""}
-            </div>`;
-            const detail = hasDetail
-              ? `<div class="day-expand"><div><div class="day-expand-inner">
-                  ${it.ev.location ? `<div class="day-loc-full">📍 ${escapeHtml(it.ev.location)}</div>` : ""}
-                  ${it.ev.body ? `<div class="day-body-text">${escapeHtml(it.ev.body)}</div>` : ""}
-                  ${it.ev.joinUrl ? `<a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(it.ev.joinUrl)}">🔵 Zoomで参加</a>` : ""}
-                </div></div></div>`
-              : "";
-            return `<li class="${hasDetail ? "day-event" : ""}" data-i="${i}">${head}${detail}</li>`;
-          }
+          if (it.kind === "event") return eventItemHtml(it.ev, it.time || "終日");
           if (it.kind === "task")
             return `<li class="day-click" data-i="${i}"><span class="day-time">期日</span>✅ ${escapeHtml(it.title)} ${statusBadge(it.t["ステータス"])}</li>`;
           return `<li class="day-click" data-i="${i}"><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
@@ -1172,9 +1416,7 @@ function openDayDetail(ymd) {
       else if (it.kind === "meeting") openMeetingDetail(it.m);
     });
   });
-  document.querySelectorAll("#drawer-content .day-event").forEach((li) => {
-    li.querySelector(".day-row").addEventListener("click", () => li.classList.toggle("open"));
-  });
+  bindEventAccordions(document.getElementById("drawer-content"));
 }
 
 // タスクタイムライン（今日±: プロジェクト行 × 期日マーカー）
@@ -1400,9 +1642,7 @@ function eventListHtml(events, emptyMsg) {
       return `<div class="pv-day ${isToday ? "pv-today" : ""}">
         <div class="pv-day-head">${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}（${w}）${isToday ? "・今日" : ""}</div>
         <ul class="day-list">${evs
-          .map(
-            (e) => `<li><span class="day-time">${e.allDay ? "終日" : e.start.slice(11, 16)}</span>${escapeHtml(e.title)}${e.location ? `<small class="day-loc">${escapeHtml(e.location)}</small>` : ""}</li>`
-          )
+          .map((e) => eventItemHtml(e, e.allDay ? "終日" : e.start.slice(11, 16)))
           .join("")}</ul>
       </div>`;
     })
@@ -1416,12 +1656,14 @@ function renderPersonTab(person) {
 
   // 予定
   const events = personEvents(person.owner, today, weekEnd);
-  panel.querySelector(".pv-schedule").innerHTML = eventListHtml(
+  const pvSchedule = panel.querySelector(".pv-schedule");
+  pvSchedule.innerHTML = eventListHtml(
     events,
     state.data.calendar?.events?.length
       ? "直近7日間の予定はありません"
       : "Outlook予定は未取り込みです（設定手順はREADME参照）"
   );
+  bindEventAccordions(pvSchedule);
 
   // 関連タスク
   const open = state.data.tasks.filter((t) => !isDone(t));
@@ -1653,6 +1895,28 @@ function renderWorkload() {
 
 /* ---------------- 概要タブ ---------------- */
 
+const MATTER_MINI_COLUMNS = [
+  { label: "案件名", render: (m) => `<span class="row-title">${escapeHtml(m["案件名"])}</span>` },
+  { label: "ステータス", render: (m) => statusBadge(m["ステータス"]) },
+];
+const MEETING_MINI_COLUMNS = [
+  { label: "日時", cls: "num", render: (m) => escapeHtml(fmtDate(m["日時"])) },
+  { label: "会議名", render: (m) => `<span class="row-title">${escapeHtml(m["会議名"])}</span>` },
+  { label: "種別", render: (m) => (m["会議種別"] ? `<span class="badge">${escapeHtml(m["会議種別"])}</span>` : "") },
+];
+
+// KPIタイルクリック時のインライン内訳（renderOverviewでstate.kpiCacheに保存された内容を使う）
+function renderKpiDetail(key) {
+  const c = state.kpiCache;
+  const box = document.querySelector("#kpi-detail .kpi-detail-inner");
+  if (!c || !box) return;
+  if (key === "openTasks") renderTable(box, sortTasks(c.openTasks), TASK_COLUMNS, openTaskDetail);
+  else if (key === "overdue") renderTable(box, sortTasks(c.overdue), TASK_COLUMNS, openTaskDetail);
+  else if (key === "dueThisWeek") renderTable(box, sortTasks(c.dueThisWeek), TASK_COLUMNS, openTaskDetail);
+  else if (key === "matters") renderTable(box, c.matters, MATTER_MINI_COLUMNS, openMatterDetail);
+  else if (key === "recentMeetings") renderTable(box, sortMeetings(c.recentMeetings), MEETING_MINI_COLUMNS, openMeetingDetail);
+}
+
 function renderOverview() {
   const { tasks, matters, projects, meetings, meta } = state.data;
   const openTasks = tasks.filter((t) => !isDone(t));
@@ -1669,22 +1933,37 @@ function renderOverview() {
     return d !== null && d >= -30 && d <= 0;
   });
 
-  // KPIタイル
-  document.getElementById("kpi-row").innerHTML = [
-    { label: "進行中タスク", value: openTasks.length, sub: `全${tasks.length}件中` },
-    { label: "⚠ 期限超過", value: overdue.length, sub: "対応が必要", critical: overdue.length > 0 },
-    { label: "今週期日", value: dueThisWeek.length, sub: "7日以内" },
-    { label: "進行中案件", value: matters.length, sub: "案件ボード" },
-    { label: "直近30日の会議", value: recentMeetings.length, sub: `議事録 全${meetings.length}件` },
-  ]
-    .map(
-      (k) => `<div class="kpi ${k.critical ? "kpi-critical" : ""}">
-        <div class="kpi-label">${k.label}</div>
+  // KPIタイル（クリックでその場に内訳をインライン展開）
+  state.kpiCache = { openTasks, overdue, dueThisWeek, matters, recentMeetings };
+  const KPI_DEFS = [
+    { key: "openTasks", label: "進行中タスク", value: openTasks.length, sub: `全${tasks.length}件中` },
+    { key: "overdue", label: "⚠ 期限超過", value: overdue.length, sub: "対応が必要", critical: overdue.length > 0 },
+    { key: "dueThisWeek", label: "今週期日", value: dueThisWeek.length, sub: "7日以内" },
+    { key: "matters", label: "進行中案件", value: matters.length, sub: "案件ボード" },
+    { key: "recentMeetings", label: "直近30日の会議", value: recentMeetings.length, sub: `議事録 全${meetings.length}件` },
+  ];
+  document.getElementById("kpi-row").innerHTML = KPI_DEFS.map(
+    (k) => `<div class="kpi kpi-click ${k.critical ? "kpi-critical" : ""}" data-kpi="${k.key}">
+        <div class="kpi-label">${escapeHtml(k.label)}</div>
         <div class="kpi-value">${k.value}</div>
-        <div class="kpi-sub">${k.sub}</div>
+        <div class="kpi-sub">${escapeHtml(k.sub)}</div>
       </div>`
-    )
-    .join("");
+  ).join("");
+  const kpiDetail = document.getElementById("kpi-detail");
+  document.querySelectorAll(".kpi-click").forEach((tile) => {
+    tile.addEventListener("click", () => {
+      const wasActive = tile.classList.contains("active");
+      document.querySelectorAll(".kpi-click").forEach((t) => t.classList.remove("active"));
+      if (wasActive) {
+        kpiDetail.classList.remove("open");
+        return;
+      }
+      tile.classList.add("active");
+      kpiDetail.innerHTML = `<div><div class="kpi-detail-inner"></div></div>`;
+      renderKpiDetail(tile.dataset.kpi);
+      kpiDetail.classList.add("open");
+    });
+  });
 
   // 今週のフォーカス（タスクから自動生成。手書き分があれば下に併記）
   const manual = (meta.weeklyFocus || "")
@@ -1702,14 +1981,27 @@ function renderOverview() {
   const todayCard = document.getElementById("today-card");
   if (todayItems.length) {
     todayCard.style.display = "";
-    document.getElementById("today-list").innerHTML = `<ul class="day-list">${todayItems
+    const todayList = document.getElementById("today-list");
+    todayList.innerHTML = `<ul class="day-list">${todayItems
       .map((it) => {
-        if (it.kind === "event")
-          return `<li><span class="day-time">${it.time || "終日"}</span><span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>${escapeHtml(it.title)}</li>`;
-        if (it.kind === "task") return `<li><span class="day-time">期日</span>✅ ${escapeHtml(it.title)}</li>`;
-        return `<li><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
+        if (it.kind === "event") return eventItemHtml(it.ev, it.time || "終日");
+        if (it.kind === "task")
+          return `<li class="day-click" data-task-id="${escapeHtml(it.t.id)}"><span class="day-time">期日</span>✅ ${escapeHtml(it.title)}</li>`;
+        return `<li class="day-click" data-meeting-id="${escapeHtml(it.m.id)}"><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
       })
       .join("")}</ul>`;
+    todayList.querySelectorAll(".day-click").forEach((li) => {
+      li.addEventListener("click", () => {
+        if (li.dataset.taskId) {
+          const t = tasks.find((x) => x.id === li.dataset.taskId);
+          if (t) openTaskDetail(t);
+        } else if (li.dataset.meetingId) {
+          const m = meetings.find((x) => x.id === li.dataset.meetingId);
+          if (m) openMeetingDetail(m);
+        }
+      });
+    });
+    bindEventAccordions(todayList);
   } else {
     todayCard.style.display = "none";
   }
@@ -1868,6 +2160,11 @@ async function main() {
   renderKnowledgeTab();
   activateTab(location.hash.slice(1) || "overview");
   setInterval(tickElapsed, 60000);
+  if (typeof Notification !== "undefined" && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+  checkUpcomingMeetings();
+  setInterval(checkUpcomingMeetings, 20000);
 }
 
 /* ---------------- 設定モーダル ---------------- */
