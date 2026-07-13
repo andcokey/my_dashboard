@@ -315,6 +315,44 @@ async function buildCalendar() {
   return { updatedAt: new Date().toISOString(), events };
 }
 
+// 汎用: sync/<domain>-snapshot.enc.json を読み、復号して返す（無ければ空のfallback）
+async function readSnapshot(domain, fallback) {
+  try {
+    const raw = JSON.parse(
+      await readFile(path.join(__dirname, `${domain}-snapshot.enc.json`), "utf8")
+    );
+    if (!isEncrypted(raw)) return raw;
+    if (!SITE_PASSWORD) {
+      console.warn(`${domain}-snapshot: SITE_PASSWORD未設定のため復号できません`);
+      return fallback;
+    }
+    return await decryptJson(raw, SITE_PASSWORD);
+  } catch {
+    return fallback; // スナップショットなしは正常
+  }
+}
+
+/* ---------- Slack監視・Outlookメール監視（ローカル自動化から供給） ---------- */
+async function buildSlack() {
+  const snap = await readSnapshot("slack", null);
+  if (!snap) return { fetchedAt: null, mentions: [], todosCreated: [] };
+  return {
+    fetchedAt: snap.fetchedAt ?? null,
+    mentions: snap.mentions ?? [],
+    todosCreated: snap.todosCreated ?? [],
+  };
+}
+
+async function buildMail() {
+  const snap = await readSnapshot("mail", null);
+  if (!snap) return { fetchedAt: null, mailboxes: [], items: [] };
+  return {
+    fetchedAt: snap.fetchedAt ?? null,
+    mailboxes: snap.mailboxes ?? [],
+    items: snap.items ?? [],
+  };
+}
+
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -372,6 +410,12 @@ async function main() {
   console.log("予定表を組み立て中...");
   const calendar = await buildCalendar();
 
+  console.log("Slack監視データを読み込み中...");
+  const slack = await buildSlack();
+
+  console.log("Outlookメール監視データを読み込み中...");
+  const mail = await buildMail();
+
   const meta = {
     syncedAt: new Date().toISOString(),
     weeklyFocus,
@@ -396,10 +440,12 @@ async function main() {
   await writeData("meetings", meetings);
   await writeData("knowledge", knowledge);
   await writeData("calendar", calendar);
+  await writeData("slack", slack);
+  await writeData("mail", mail);
   await writeData("meta", meta);
 
   console.log(
-    `完了: matters=${matters.length} tasks=${tasks.length} projects=${projects.length} meetings=${meetings.length} calendar=${calendar.events.length}${SITE_PASSWORD ? "（暗号化あり）" : "（平文）"}`
+    `完了: matters=${matters.length} tasks=${tasks.length} projects=${projects.length} meetings=${meetings.length} calendar=${calendar.events.length} slack=${slack.mentions.length} mail=${mail.items.length}${SITE_PASSWORD ? "（暗号化あり）" : "（平文）"}`
   );
 }
 

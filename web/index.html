@@ -40,6 +40,11 @@
       <div id="workload-week" class="chart-box"></div>
     </div>
 
+    <div class="card" id="reply-mini-card" style="display:none">
+      <h2>🔁 返信待ち<small>Slack・メール　クリックで返信管理タブへ</small></h2>
+      <div id="reply-mini-list"></div>
+    </div>
+
     <div class="grid-2">
       <div class="card">
         <h2>タスクステータス構成<small>全タスク</small></h2>
@@ -118,6 +123,22 @@
     <div class="card" id="workload-weekly-card" style="display:none">
       <h2>週別 会議時間<small>直近4週・自分のOutlook予定を案件別に集計</small></h2>
       <div id="workload-weekly" class="chart-box"></div>
+    </div>
+  </section>
+
+  <!-- 返信管理 -->
+  <section id="panel-reply" class="tab-panel">
+    <div class="card">
+      <h2>💬 Slackメンション監視<small>未返信・:todo_itabashi3:スタンプでTODO化</small></h2>
+      <div id="reply-slack-kpi" class="kpi-row"></div>
+      <div id="reply-slack-list"></div>
+      <p id="reply-slack-note" class="section-note"></p>
+    </div>
+    <div class="card">
+      <h2>📧 Outlookメール監視<small>未返信の経過時間</small></h2>
+      <div id="reply-mail-kpi" class="kpi-row"></div>
+      <div id="reply-mail-list"></div>
+      <p id="reply-mail-note" class="section-note"></p>
     </div>
   </section>
 

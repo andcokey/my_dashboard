@@ -5,6 +5,7 @@ const TABS = [
   { id: "me", label: "For me" },
   { id: "nishiyama", label: "For 西山副社長" },
   { id: "calendar", label: "予定表" },
+  { id: "reply", label: "返信管理" },
   { id: "matters", label: "進行中案件" },
   { id: "tasks", label: "TODO" },
   { id: "projects", label: "プロジェクト" },
@@ -129,6 +130,7 @@ function rerenderAll() {
   renderOverview();
   renderPersonTabs();
   renderCalendarTab();
+  renderReplyTab();
   renderWorkload();
   renderMattersTab();
   renderTasksTab();
@@ -157,6 +159,14 @@ function dateStart(dateVal) {
   if (!dateVal) return null;
   if (typeof dateVal === "string") return dateVal.slice(0, 10);
   return dateVal.start ? dateVal.start.slice(0, 10) : null;
+}
+
+// 期日に時刻成分（"YYYY-MM-DDTHH:MM..."）があれば "HH:MM" を返す。日付のみなら空文字
+function timeOfDate(dateVal) {
+  if (!dateVal) return "";
+  const s = typeof dateVal === "string" ? dateVal : dateVal.start;
+  if (!s || s.length < 16 || s[10] !== "T") return "";
+  return s.slice(11, 16);
 }
 
 function fmtDate(dateVal) {
@@ -221,6 +231,37 @@ function dueCell(row) {
   if (d < 0) return `<span class="due-over">${escapeHtml(s)} (${-d}日超過)</span>`;
   if (d <= 3) return `<span class="due-soon">${escapeHtml(s)} (あと${d}日)</span>`;
   return escapeHtml(s);
+}
+
+// ---- 経過時間（Slackメンション・未返信メール監視用） ----
+function elapsedMs(iso) {
+  return Date.now() - new Date(iso).getTime();
+}
+function elapsedLabel(iso) {
+  const ms = elapsedMs(iso);
+  if (ms < 0) return "たった今";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "1分未満";
+  if (min < 60) return `${min}分`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}時間${min % 60 ? (min % 60) + "分" : ""}`;
+  const d = Math.floor(h / 24);
+  return `${d}日${h % 24 ? (h % 24) + "時間" : ""}`;
+}
+function elapsedClass(iso) {
+  const h = elapsedMs(iso) / 3600000;
+  if (h >= 24) return "due-over";
+  if (h >= 4) return "due-soon";
+  return "";
+}
+// 開閉状態を保ったまま経過時間バッジだけを1分毎に更新する
+function tickElapsed() {
+  document.querySelectorAll("[data-elapsed-since]").forEach((el) => {
+    el.textContent = elapsedLabel(el.dataset.elapsedSince);
+    el.classList.remove("due-over", "due-soon");
+    const cls = elapsedClass(el.dataset.elapsedSince);
+    if (cls) el.classList.add(cls);
+  });
 }
 
 function peopleText(v) {
@@ -498,6 +539,9 @@ function editFormHtml(item, rows, { withMemo = "メモ" } = {}) {
       <label>期日
         <input type="date" name="期日" value="${escapeHtml(dateStart(item["期日"]) || "")}">
       </label>
+      <label>時刻(任意)
+        <input type="time" name="期日時刻" value="${escapeHtml(timeOfDate(item["期日"]))}">
+      </label>
     </div>
     ${withMemo ? `<label class="edit-wide">${escapeHtml(withMemo)}
       <input type="text" name="${escapeHtml(withMemo)}" value="${escapeHtml(item[withMemo] || "")}">
@@ -515,10 +559,12 @@ function bindEditForm(container, item, { onSaved, withMemo = "メモ" } = {}) {
   const form = container.querySelector(".edit-form");
   if (!form) return;
   const save = async (overrides = {}) => {
+    const dueDate = form.elements["期日"].value;
+    const dueTime = form.elements["期日時刻"]?.value;
     const props = {
       ステータス: form.elements["ステータス"].value,
       優先度: form.elements["優先度"].value,
-      期日: form.elements["期日"].value,
+      期日: dueDate ? (dueTime ? `${dueDate}T${dueTime}:00+09:00` : dueDate) : "",
       ...(withMemo && form.elements[withMemo] ? { [withMemo]: form.elements[withMemo].value } : {}),
       ...overrides,
     };
@@ -605,6 +651,9 @@ function openCreateTask() {
         <label>期日
           <input type="date" name="期日">
         </label>
+        <label>時刻(任意)
+          <input type="time" name="期日時刻">
+        </label>
       </div>
       <div class="edit-grid">
         <label>プロジェクト
@@ -627,11 +676,13 @@ function openCreateTask() {
     const dbId = state.data.meta?.sources?.tasks;
     if (!dbId) { toast("データベースIDが不明です（次回同期後に利用可能）", true); return; }
     const projId = form.elements["プロジェクト"].value;
+    const dueDate = form.elements["期日"].value;
+    const dueTime = form.elements["期日時刻"].value;
     const props = {
       タスク名: form.elements["タスク名"].value,
       ステータス: form.elements["ステータス"].value,
       優先度: form.elements["優先度"].value,
-      期日: form.elements["期日"].value,
+      期日: dueDate ? (dueTime ? `${dueDate}T${dueTime}:00+09:00` : dueDate) : "",
       メモ: form.elements["メモ"].value,
       ...(projId ? { プロジェクト: [projId] } : {}),
     };
@@ -1088,8 +1139,24 @@ function openDayDetail(ymd) {
   document.getElementById("drawer-content").innerHTML = items.length
     ? `<ul class="day-list">${items
         .map((it, i) => {
-          if (it.kind === "event")
-            return `<li><span class="day-time">${it.time || "終日"}</span><span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>${escapeHtml(it.title)}${it.ev.location ? `<small class="day-loc">${escapeHtml(it.ev.location)}</small>` : ""}</li>`;
+          if (it.kind === "event") {
+            const hasDetail = it.ev.body || it.ev.joinUrl || it.ev.location;
+            const head = `<div class="day-row">
+              <span class="day-time">${it.time || "終日"}</span>
+              <span class="swatch" style="background:${ownerColor(it.ev.owner)}"></span>
+              <span class="day-row-title">${escapeHtml(it.title)}</span>
+              ${it.ev.location ? `<small class="day-loc">${escapeHtml(it.ev.location)}</small>` : ""}
+              ${hasDetail ? `<span class="day-expand-caret">▾</span>` : ""}
+            </div>`;
+            const detail = hasDetail
+              ? `<div class="day-expand"><div><div class="day-expand-inner">
+                  ${it.ev.location ? `<div class="day-loc-full">📍 ${escapeHtml(it.ev.location)}</div>` : ""}
+                  ${it.ev.body ? `<div class="day-body-text">${escapeHtml(it.ev.body)}</div>` : ""}
+                  ${it.ev.joinUrl ? `<a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(it.ev.joinUrl)}">🔵 Zoomで参加</a>` : ""}
+                </div></div></div>`
+              : "";
+            return `<li class="${hasDetail ? "day-event" : ""}" data-i="${i}">${head}${detail}</li>`;
+          }
           if (it.kind === "task")
             return `<li class="day-click" data-i="${i}"><span class="day-time">期日</span>✅ ${escapeHtml(it.title)} ${statusBadge(it.t["ステータス"])}</li>`;
           return `<li class="day-click" data-i="${i}"><span class="day-time">MTG</span>📝 ${escapeHtml(it.title)}</li>`;
@@ -1104,6 +1171,9 @@ function openDayDetail(ymd) {
       if (it.kind === "task") openTaskDetail(it.t);
       else if (it.kind === "meeting") openMeetingDetail(it.m);
     });
+  });
+  document.querySelectorAll("#drawer-content .day-event").forEach((li) => {
+    li.querySelector(".day-row").addEventListener("click", () => li.classList.toggle("open"));
   });
 }
 
@@ -1172,6 +1242,127 @@ function renderTimeline() {
     dot.addEventListener("click", () => {
       const t = state.data.tasks.find((x) => x.id === dot.dataset.id);
       if (t) openTaskDetail(t);
+    });
+  });
+}
+
+/* ---------------- 返信管理タブ（Slackメンション・Outlookメール監視） ---------------- */
+
+function renderReplyTab() {
+  const slack = state.data.slack || { mentions: [], todosCreated: [] };
+  const mail = state.data.mail || { items: [] };
+
+  const unreplied = [...(slack.mentions || []).filter((m) => !m.isReplied)].sort((a, b) =>
+    a.mentionedAt.localeCompare(b.mentionedAt)
+  );
+  const replied = (slack.mentions || []).filter((m) => m.isReplied);
+
+  const slackKpi = document.getElementById("reply-slack-kpi");
+  if (slackKpi) {
+    slackKpi.innerHTML = `
+      <div class="kpi ${unreplied.length ? "kpi-critical" : ""}"><div class="kpi-label">未返信メンション</div><div class="kpi-value">${unreplied.length}</div></div>
+      <div class="kpi"><div class="kpi-label">返信済み（表示中）</div><div class="kpi-value">${replied.length}</div></div>
+      <div class="kpi"><div class="kpi-label">TODO化済み</div><div class="kpi-value">${(slack.todosCreated || []).length}</div></div>`;
+  }
+
+  const slackList = document.getElementById("reply-slack-list");
+  if (slackList) {
+    const rows = [...unreplied, ...replied];
+    slackList.innerHTML = !rows.length
+      ? `<div class="empty-state">Slack監視データはまだありません</div>`
+      : `<ul class="day-list">${rows
+          .map((m, i) => {
+            const timeHtml = m.isReplied
+              ? `<span class="day-time">返信済</span>`
+              : `<span class="day-time ${elapsedClass(m.mentionedAt)}" data-elapsed-since="${escapeHtml(m.mentionedAt)}">${elapsedLabel(m.mentionedAt)}</span>`;
+            return `<li class="day-event" data-i="${i}">
+              <div class="day-row">
+                ${timeHtml}
+                <span class="day-row-title">${escapeHtml(m.channelName || m.channel || "DM")} ・ ${escapeHtml(m.authorName || m.author || "")}</span>
+                <span class="day-expand-caret">▾</span>
+              </div>
+              <div class="day-expand"><div><div class="day-expand-inner">
+                <div class="day-body-text">${escapeHtml(m.text || "")}</div>
+                ${m.permalink ? `<a class="btn btn-primary" target="_blank" rel="noopener" href="${escapeHtml(m.permalink)}">💬 Slackで開く</a>` : ""}
+              </div></div></div>
+            </li>`;
+          })
+          .join("")}</ul>`;
+    slackList.querySelectorAll(".day-event").forEach((li) => {
+      li.querySelector(".day-row").addEventListener("click", () => li.classList.toggle("open"));
+    });
+  }
+  const slackNote = document.getElementById("reply-slack-note");
+  if (slackNote) {
+    slackNote.textContent = slack.fetchedAt
+      ? `最終確認: ${new Date(slack.fetchedAt).toLocaleString("ja-JP")}（1時間ごと自動、:todo_itabashi3:スタンプでTODO化）`
+      : "Slack監視はまだ設定されていません。";
+  }
+
+  // Outlookメール監視
+  const mailItems = [...(mail.items || [])].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
+  const mailUnreplied = mailItems.filter((m) => m.isUnreplied);
+
+  const mailKpi = document.getElementById("reply-mail-kpi");
+  if (mailKpi) {
+    mailKpi.innerHTML = `
+      <div class="kpi ${mailUnreplied.length ? "kpi-critical" : ""}"><div class="kpi-label">未返信メール</div><div class="kpi-value">${mailUnreplied.length}</div></div>`;
+  }
+
+  const mailList = document.getElementById("reply-mail-list");
+  if (mailList) {
+    mailList.innerHTML = !mailUnreplied.length
+      ? `<div class="empty-state">未返信メールはありません</div>`
+      : `<ul class="day-list">${mailUnreplied
+          .map(
+            (m) => `<li>
+              <span class="day-time ${elapsedClass(m.receivedAt)}" data-elapsed-since="${escapeHtml(m.receivedAt)}">${elapsedLabel(m.receivedAt)}</span>
+              <span>${escapeHtml(m.mailbox || "")} ・ ${escapeHtml(m.fromName || m.from || "")}：${escapeHtml(m.subject || "(件名なし)")}</span>
+            </li>`
+          )
+          .join("")}</ul>`;
+  }
+  const mailNote = document.getElementById("reply-mail-note");
+  if (mailNote) {
+    mailNote.textContent = mail.fetchedAt
+      ? `最終確認: ${new Date(mail.fetchedAt).toLocaleString("ja-JP")}（1時間ごと自動、対象: ${(mail.mailboxes || []).join(", ") || "-"}）`
+      : "メール監視はまだ設定されていません。";
+  }
+
+  renderReplyMini(unreplied, mailUnreplied);
+}
+
+// 概要タブ用の軽量サマリー（返信管理タブへのショートカット）
+function renderReplyMini(unrepliedMentions, unrepliedMails) {
+  const card = document.getElementById("reply-mini-card");
+  const list = document.getElementById("reply-mini-list");
+  if (!card || !list) return;
+  const total = unrepliedMentions.length + unrepliedMails.length;
+  card.style.display = total ? "" : "none";
+  if (!total) return;
+  const rows = [
+    ...unrepliedMentions.slice(0, 3).map((m) => ({
+      label: `💬 ${m.channelName || m.channel || "DM"}`,
+      sub: m.text || "",
+      since: m.mentionedAt,
+    })),
+    ...unrepliedMails.slice(0, 3).map((m) => ({
+      label: `📧 ${m.fromName || m.from || ""}`,
+      sub: m.subject || "",
+      since: m.receivedAt,
+    })),
+  ];
+  list.innerHTML = `<ul class="day-list">${rows
+    .map(
+      (r) => `<li class="day-click">
+        <span class="day-time ${elapsedClass(r.since)}" data-elapsed-since="${escapeHtml(r.since)}">${elapsedLabel(r.since)}</span>
+        <span>${escapeHtml(r.label)}：${escapeHtml((r.sub || "").slice(0, 40))}</span>
+      </li>`
+    )
+    .join("")}</ul>`;
+  list.querySelectorAll(".day-click").forEach((li) => {
+    li.addEventListener("click", () => {
+      location.hash = "#reply";
     });
   });
 }
@@ -1645,14 +1836,19 @@ async function main() {
 
   const metaBar = document.querySelector(".meta-bar");
   try {
-    const names = ["matters", "tasks", "projects", "meetings", "knowledge", "meta", "calendar"];
+    const names = ["matters", "tasks", "projects", "meetings", "knowledge", "meta", "calendar", "slack", "mail"];
+    const EMPTY_FALLBACK = {
+      calendar: { events: [] }, // 予定表は未生成でも動かす
+      slack: { mentions: [], todosCreated: [] }, // Slack監視は未生成でも動かす
+      mail: { items: [] }, // メール監視は未生成でも動かす
+    };
     const raw = {};
     await Promise.all(
       names.map(async (n) => {
         try {
           raw[n] = await loadJson(n);
         } catch (e) {
-          if (n === "calendar") raw[n] = { events: [] }; // 予定表は未生成でも動かす
+          if (EMPTY_FALLBACK[n]) raw[n] = EMPTY_FALLBACK[n];
           else throw e;
         }
       })
@@ -1671,6 +1867,7 @@ async function main() {
   rerenderAll();
   renderKnowledgeTab();
   activateTab(location.hash.slice(1) || "overview");
+  setInterval(tickElapsed, 60000);
 }
 
 /* ---------------- 設定モーダル ---------------- */

@@ -625,9 +625,52 @@ footer {
   min-width: 38px;
   flex: none;
 }
-.day-loc { color: var(--muted); margin-left: 6px; }
+.day-loc {
+  color: var(--muted);
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
 .day-click { cursor: pointer; }
 .day-click:hover { background: rgba(42, 120, 214, 0.05); }
+
+/* ---------- インライン展開（予定・Slackメンション詳細） ---------- */
+.day-list li.day-event { display: block; padding: 0; }
+.day-list li.day-event .day-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 2px;
+  cursor: pointer;
+}
+.day-list li.day-event .day-row:hover { background: rgba(42, 120, 214, 0.05); }
+.day-row-title { flex: 1; }
+.day-expand-caret {
+  color: var(--muted);
+  font-size: 11px;
+  flex: none;
+  transition: transform 0.2s ease;
+}
+.day-event.open .day-expand-caret { transform: rotate(180deg); }
+.day-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.22s ease;
+}
+.day-event.open .day-expand { grid-template-rows: 1fr; }
+.day-expand > div { overflow: hidden; min-height: 0; }
+.day-expand-inner {
+  padding: 2px 8px 12px 46px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.day-loc-full { margin-bottom: 6px; max-width: none; }
+.day-body-text { white-space: pre-wrap; margin-bottom: 8px; }
+.day-expand-inner .btn { display: inline-block; }
 
 .focus-manual { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
 .focus-manual summary { cursor: pointer; color: var(--muted); }
