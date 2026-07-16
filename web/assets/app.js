@@ -102,6 +102,28 @@ function canEdit() {
   return !!(gasUrl() && getPass());
 }
 
+/* ---------------- 未返信メールの取り下げ（このブラウザ内のみ非表示・Notion非連携） ---------------- */
+
+const DISMISSED_MAIL_KEY = "dash_dismissed_mail_ids";
+
+function mailKey(m) {
+  return m.id || `${m.receivedAt}|${m.from}|${m.subject}`;
+}
+
+function getDismissedMailIds() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_MAIL_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function dismissMail(id) {
+  const set = getDismissedMailIds();
+  set.add(id);
+  localStorage.setItem(DISMISSED_MAIL_KEY, JSON.stringify([...set]));
+}
+
 async function gasCall(body) {
   const url = gasUrl();
   if (!url) throw new Error("編集エンドポイント未設定です（⚙設定から登録してください）");
@@ -860,7 +882,37 @@ const TASK_COLUMNS = [
   { label: "優先度", render: (t) => priBadge(t["優先度"]) },
   { label: "期日", cls: "num", render: (t) => dueCell(t) },
   { label: "プロジェクト", render: (t) => escapeHtml(projectNames(t)) },
+  {
+    label: "",
+    render: (t) =>
+      DONE_STATUSES.has(t["ステータス"])
+        ? ""
+        : `<button type="button" class="btn btn-mini btn-task-dismiss" data-id="${escapeHtml(t.id)}">取り下げ</button>`,
+  },
 ];
+
+async function dismissTask(id) {
+  const t = state.data.tasks.find((x) => x.id === id);
+  if (!t) return;
+  try {
+    await gasCall({ action: "update", pageId: id, props: { ステータス: "見送り" } });
+    t["ステータス"] = "見送り";
+    toast("取り下げました（ステータスを見送りに変更・Notionに反映済み）");
+    rerenderAll();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function bindTaskDismissButtons(container) {
+  container.querySelectorAll(".btn-task-dismiss").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      btn.disabled = true;
+      dismissTask(btn.dataset.id);
+    });
+  });
+}
 
 function renderTasksTab() {
   const tasks = sortTasks(state.data.tasks);
@@ -870,6 +922,10 @@ function renderTasksTab() {
     addBtn.dataset.bound = "1";
     addBtn.addEventListener("click", openCreateTask);
   }
+  const doRender = (rows) => {
+    renderTable(tableEl, rows, TASK_COLUMNS, openTaskDetail);
+    bindTaskDismissButtons(tableEl);
+  };
   setupFilters(
     document.getElementById("tasks-filter"),
     tasks,
@@ -878,9 +934,9 @@ function renderTasksTab() {
       { allLabel: "すべてのプロジェクト", get: (t) => (t["プロジェクト"] || []).map((r) => r.name).filter(Boolean) },
     ],
     ["タスク名", "メモ", (t) => t.body],
-    (rows) => renderTable(tableEl, rows, TASK_COLUMNS, openTaskDetail)
+    doRender
   );
-  renderTable(tableEl, tasks, TASK_COLUMNS, openTaskDetail);
+  doRender(tasks);
 }
 
 function renderMattersTab() {
@@ -1552,6 +1608,7 @@ function renderReplyTab() {
             (c, i) => `<li class="day-click" data-i="${i}">
               <span class="day-time">${escapeHtml((c.createdAt || "").slice(0, 16).replace("T", " "))}</span>
               <span>${escapeHtml((c.text || "").slice(0, 70))}</span>
+              ${c.taskId ? `<button type="button" class="btn btn-mini btn-todo-dismiss" data-i="${i}">取り下げ</button>` : ""}
             </li>`
           )
           .join("")}</ul>`;
@@ -1564,11 +1621,30 @@ function renderReplyTab() {
         else toast("開き先の情報がありません", true);
       });
     });
+    todosList.querySelectorAll(".btn-todo-dismiss").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const c = created[Number(btn.dataset.i)];
+        if (!c || !c.taskId) return;
+        btn.disabled = true;
+        try {
+          await gasCall({ action: "update", pageId: c.taskId, props: { ステータス: "見送り" } });
+          const t = state.data.tasks.find((x) => x.id === c.taskId);
+          if (t) t["ステータス"] = "見送り";
+          toast("取り下げました（ステータスを見送りに変更・Notionに反映済み）");
+          rerenderAll();
+        } catch (err) {
+          toast(err.message, true);
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   // Outlookメール監視
+  const dismissedMailIds = getDismissedMailIds();
   const mailItems = [...(mail.items || [])].sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
-  const mailUnreplied = mailItems.filter((m) => m.isUnreplied);
+  const mailUnreplied = mailItems.filter((m) => m.isUnreplied && !dismissedMailIds.has(mailKey(m)));
 
   const mailKpi = document.getElementById("reply-mail-kpi");
   if (mailKpi) {
@@ -1582,12 +1658,22 @@ function renderReplyTab() {
       ? `<div class="empty-state">未返信メールはありません</div>`
       : `<ul class="day-list">${mailUnreplied
           .map(
-            (m) => `<li>
+            (m, i) => `<li data-i="${i}">
               <span class="day-time ${elapsedClass(m.receivedAt)}" data-elapsed-since="${escapeHtml(m.receivedAt)}">${elapsedLabel(m.receivedAt)}</span>
               <span>${escapeHtml(m.mailbox || "")} ・ ${escapeHtml(m.fromName || m.from || "")}：${escapeHtml(m.subject || "(件名なし)")}</span>
+              <button type="button" class="btn btn-mini btn-mail-dismiss" data-i="${i}">取り下げ</button>
             </li>`
           )
           .join("")}</ul>`;
+    mailList.querySelectorAll(".btn-mail-dismiss").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const m = mailUnreplied[Number(btn.dataset.i)];
+        if (!m) return;
+        dismissMail(mailKey(m));
+        toast("この端末上で非表示にしました");
+        renderReplyTab();
+      });
+    });
   }
   const mailNote = document.getElementById("reply-mail-note");
   if (mailNote) {
