@@ -246,6 +246,21 @@ function priBadge(pri) {
   return `<span class="badge ${cls}">P${n}</span>`;
 }
 
+// タスクに必要なアクション（返信/確認/対応/その他）を示す小バッジ
+function actionBadge(t) {
+  const a = t["アクション"];
+  if (!a) return "";
+  const cls = a === "返信" ? "st-review" : a === "対応" ? "st-active" : "st-hold";
+  return `<span class="badge ${cls}" title="必要なアクション">${escapeHtml(a)}</span>`;
+}
+
+// 自分がCC的に含まれているだけ（主たる宛先ではない）ことを示す小バッジ。本人宛の場合は何も表示しない
+function ccBadge(t) {
+  return t["宛先"] === "CC"
+    ? `<span class="badge st-hold" title="自分が主たる宛先ではなくCC的に含まれているメッセージ">CC</span>`
+    : "";
+}
+
 function dueCell(row) {
   const s = dateStart(row["期日"] ?? row["日時"]);
   if (!s) return "";
@@ -752,6 +767,8 @@ function propGrid(pairs) {
 function openTaskDetail(t) {
   openDrawer(t["タスク名"] || "(無題)", propGrid([
     ["ID", escapeHtml(t["ID"])],
+    ["アクション", escapeHtml(t["アクション"])],
+    ["宛先", escapeHtml(t["宛先"])],
     ["担当者", escapeHtml(peopleText(t["担当者"]))],
     ["プロジェクト", escapeHtml(projectNames(t))],
   ]) + editFormHtml(t, state.data.tasks),
@@ -877,7 +894,11 @@ function sortTasks(tasks) {
 }
 
 const TASK_COLUMNS = [
-  { label: "タスク", render: (t) => `<span class="row-title">${escapeHtml(t["タスク名"])}</span>` },
+  {
+    label: "タスク",
+    render: (t) =>
+      `<span class="row-title">${escapeHtml(t["タスク名"])}</span> ${actionBadge(t)} ${ccBadge(t)}`,
+  },
   { label: "ステータス", render: (t) => statusBadge(t["ステータス"]) },
   { label: "優先度", render: (t) => priBadge(t["優先度"]) },
   { label: "期日", cls: "num", render: (t) => dueCell(t) },
@@ -1604,13 +1625,16 @@ function renderReplyTab() {
     todosList.innerHTML = !created.length
       ? `<div class="empty-state">TODO化した項目はまだありません</div>`
       : `<ul class="day-list">${created
-          .map(
-            (c, i) => `<li class="day-click" data-i="${i}">
+          .map((c, i) => {
+            const t = c.taskId ? state.data.tasks.find((x) => x.id === c.taskId) : null;
+            const label = t ? t["タスク名"] : (c.text || "").slice(0, 20);
+            const badges = t ? `${actionBadge(t)} ${ccBadge(t)}` : "";
+            return `<li class="day-click" data-i="${i}">
               <span class="day-time">${escapeHtml((c.createdAt || "").slice(0, 16).replace("T", " "))}</span>
-              <span>${escapeHtml((c.text || "").slice(0, 70))}</span>
+              <span>${escapeHtml(label)}</span> ${badges}
               ${c.taskId ? `<button type="button" class="btn btn-mini btn-todo-dismiss" data-i="${i}">取り下げ</button>` : ""}
-            </li>`
-          )
+            </li>`;
+          })
           .join("")}</ul>`;
     todosList.querySelectorAll(".day-click").forEach((li) => {
       li.addEventListener("click", () => {
