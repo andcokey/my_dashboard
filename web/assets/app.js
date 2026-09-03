@@ -160,6 +160,23 @@ function rerenderAll() {
   renderMeetingsTab();
 }
 
+// 監視データのカバレッジを確認し、不完全な場合は警告HTMLを返す
+function getCoverageWarning(data) {
+  if (!data) return "";
+  const requested = data.requested_window_days;
+  const actual = data.actual_covered_days;
+  const truncated = data.truncated;
+
+  if (truncated || (requested && actual && actual < requested)) {
+    const missing = requested - actual;
+    return `<div class="coverage-warning">
+      ⚠️ カバレッジ不足: 過去${requested}日間をリクエストしましたが、${actual}日分のデータのみ取得されました（${missing}日分不足）。
+      ${truncated ? "追加のデータが存在する可能性があります。" : ""}
+    </div>`;
+  }
+  return "";
+}
+
 /* ---------------- ユーティリティ ---------------- */
 
 function escapeHtml(str) {
@@ -1613,9 +1630,11 @@ function renderReplyTab() {
   }
   const slackNote = document.getElementById("reply-slack-note");
   if (slackNote) {
-    slackNote.textContent = slack.fetchedAt
+    const warning = getCoverageWarning(slack);
+    const note = slack.fetchedAt
       ? `最終確認: ${new Date(slack.fetchedAt).toLocaleString("ja-JP")}（1時間ごと自動、:todo_itabashi3:スタンプでTODO化）`
       : "Slack監視はまだ設定されていません。";
+    slackNote.innerHTML = warning + `<p>${escapeHtml(note)}</p>`;
   }
 
   // TODO化した項目一覧（クリックでタスク詳細を開く。ローカルにタスクが見つからなければNotionを別タブで開く）
@@ -1701,9 +1720,11 @@ function renderReplyTab() {
   }
   const mailNote = document.getElementById("reply-mail-note");
   if (mailNote) {
-    mailNote.textContent = mail.fetchedAt
+    const warning = getCoverageWarning(mail);
+    const note = mail.fetchedAt
       ? `最終確認: ${new Date(mail.fetchedAt).toLocaleString("ja-JP")}（1時間ごと自動、対象: ${(mail.mailboxes || []).join(", ") || "-"}）`
       : "メール監視はまだ設定されていません。";
+    mailNote.innerHTML = warning + `<p>${escapeHtml(note)}</p>`;
   }
 
   renderReplyMini(unreplied, mailUnreplied);
